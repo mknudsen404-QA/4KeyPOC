@@ -43,7 +43,7 @@ The bridge does not yet observe the live contents of a Codex or Claude terminal 
 
 Goal: make status/activity (thinking, working, waiting, needs_input, blocked, done) reflect what the CLI is actually doing, instead of only ever being set by hand.
 
-**Superseded first attempt (log-tail pattern matching).** The original plan was to tee session output via `script -q` and pattern-match the ANSI-stripped tail. Implemented and tested live, but a real captured log showed the flaw: Codex's TUI is a full-screen, cursor-positioned alternate-screen interface (`\e[row;colH` redraws, box-drawing glyphs), not linear scrolling text — naive ANSI-stripping cannot turn that into reliably matchable text; a correct version would need a real terminal emulator (`pyte`) to reconstruct the rendered screen first. The tee/log infrastructure (`host/logs/slot-N.log`, `poll_slot_logs`, `classify_activity`) is still in place as a secondary/best-effort signal, but is not the primary mechanism.
+**Superseded first attempt (log-tail pattern matching).** The original plan was to tee session output via `script -q` and pattern-match the ANSI-stripped tail. Implemented and tested live, but a real captured log showed the flaw: Codex's TUI is a full-screen, cursor-positioned alternate-screen interface (`\e[row;colH` redraws, box-drawing glyphs), not linear scrolling text — naive ANSI-stripping cannot turn that into reliably matchable text; a correct version would need a real terminal emulator (`pyte`) to reconstruct the rendered screen first. **As of Phase 0 this has been removed entirely** (`script -q`, `host/logs/`, `poll_slot_logs`, `classify_activity` are all gone) — hooks are now the only status source. A closed tab/window (which fires no lifecycle hook at all) is instead caught by process-liveness probing (`probe_liveness`/`reconcile_liveness`), not log-tailing.
 
 **Current architecture: real CLI lifecycle hooks, not screen-scraping.** Both Claude Code (`~/.claude/settings.json`) and Codex CLI (`$CODEX_HOME/hooks.json`) expose documented lifecycle hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`/`PermissionRequest`, `Stop`, `SessionEnd`) that run an arbitrary shell command on each transition. This is validated by [OpenMicro](https://github.com/stephenleo/OpenMicro) (128-star real project solving the same problem for game controllers), whose hook-installer code was used as the reference implementation. Mechanism:
 
@@ -52,7 +52,7 @@ Goal: make status/activity (thinking, working, waiting, needs_input, blocked, do
 3. The hook command is `curl -s --max-time 1 ... || true` — fire-and-forget, so it no-ops harmlessly whenever the bridge isn't running and never blocks the CLI.
 4. The bridge runs a small `ThreadingHTTPServer` on `127.0.0.1:8877` (`start_hook_server`) that maps `(family, event)` → status via `CLAUDE_HOOK_STATUS`/`CODEX_HOOK_STATUS` and pushes `agent.update` on change. Proven end-to-end with synthetic `curl` POSTs against an isolated registry: `UserPromptSubmit` → `working`, `Stop` → `done`, exactly as expected.
 
-Known limitations: hooks only take effect for sessions started *after* `install-hooks` runs (already-running sessions, e.g. one launched before this was wired in, won't call the new hooks until restarted). The event→status mapping is a reasonable first guess, not yet calibrated against a full real session — `PreToolUse` only fires for `AskUserQuestion` specifically (not all tool calls), and Codex has no dedicated error/`blocked` hook signal (OpenMicro notes the same gap: "⚠️ Notification-text matching" for Claude, "— No error hook signal" for Codex), so `blocked` still depends on the secondary log-based classifier for now.
+Known limitations: hooks only take effect for sessions started *after* `install-hooks` runs (already-running sessions, e.g. one launched before this was wired in, won't call the new hooks until restarted). The event→status mapping is a reasonable first guess, not yet calibrated against a full real session — `PreToolUse` only fires for `AskUserQuestion` specifically (not all tool calls), and Codex has no dedicated error/`blocked` hook signal (OpenMicro notes the same gap: "⚠️ Notification-text matching" for Claude, "— No error hook signal" for Codex), so `blocked` is currently unreachable for either family — there is no fallback log classifier anymore, by design (see above).
 
 For the first external switch test, use RXD0 from the actual board UART connector area as a simple input. Firmware maps External Agent Key 1 to GPIO44/RXD0. Wire a momentary switch between RXD0 and GND only. Do not use 5V, TXD pins, PWM/servo connectors, or I2C SCL/SDA for the bare switch test. The NeoKey/Qwiic I2C path remains the preferred external key-bank plan.
 
@@ -482,24 +482,31 @@ Future rotary behavior:
 
 ## Agent Status Colors
 
-The screen, illuminated keys, and future WS2812 LEDs should use the same status language.
+The screen, illuminated keys, and WS2812 LEDs use the same status language.
+Implemented in `firmware/neokey/led_model.h` as of Phase 0 (see
+`docs/design/phase0-implementation-spec.md` §6); the table below reflects
+that implementation, not an open proposal.
 
 | Status | Color | Meaning |
 | --- | --- | --- |
 | Empty | Off | No agent assigned to this slot |
-| Idle | Dim white | Agent is available or task is quiet |
-| Thinking | Purple pulse | Agent is reasoning or planning |
-| Working | Orange pulse | Agent is actively doing work |
-| Editing | Blue pulse | Agent is changing files |
-| Testing | Amber or orange pulse | Agent is running checks |
-| Waiting | Cyan slow pulse | Agent is waiting on tools, build, or external state |
-| Needs Input | Yellow fast flash | User decision or clarification required |
-| Blocked | Red solid | Agent cannot proceed without intervention |
-| Done | Green or blue solid | Task completed or command succeeded |
+| Launched / Idle | Soft white, solid | Session running but not mid-turn |
+| Thinking / Working (busy) | White -> blue -> magenta ramp, pulsing faster over the turn | Agent is actively working; color/pulse both escalate over the first ~5 minutes of the current turn, then hold at magenta/fast |
+| Waiting / Needs Input | Yellow, fast pulse (500 ms) | User decision or clarification required |
+| Blocked | Red, solid | Agent cannot proceed without intervention |
+| Done | Green, solid | Task/turn completed |
+| Unknown | Amber, slow pulse (3000 ms) | The bridge hasn't heard from this slot recently — not a status the agent reports, a "we're not sure" signal from the board/bridge relationship itself |
 
-Decision: illuminated keys are status indicators first. The screen should always keep the text status visible so color is never the only source of meaning.
+The busy ramp (`busyColor()` in `led_model.h`) measures the **current
+turn**, resetting on `UserPromptSubmit` — a long-running turn escalates, but
+starting a new prompt starts the ramp over rather than continuing to climb
+from a previous turn's color. Non-selected keys are dimmed to 40% of their
+color (floored so a dim status never disappears entirely), selected keys are
+shown at full intensity.
 
-Open color choice: Matthew likes orange for "working." Claude flagged that orange versus amber and red flash versus red solid may be hard to distinguish on real key hardware. Tentative revision: use yellow fast flash for Needs Input, red solid for Blocked, orange pulse for Working, and decide whether Testing deserves amber only after seeing real LEDs under real keycaps. Done can be steady green or steady blue; choose after seeing which color reads best on the actual key hardware.
+Run `firmware/neokey/test/run.sh` to test this logic (colors, ramp, pulse
+timing) against a plain host C++ compiler, no board or Arduino toolchain
+required.
 
 ## Command Keys
 

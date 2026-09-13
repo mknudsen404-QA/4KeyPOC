@@ -10,9 +10,9 @@ cd 4KeyPOC/host
 
 `setup.sh` is idempotent — safe to re-run any time (e.g. after a fresh `git
 pull`). It creates the venv, installs the voice-hold dependency, creates
-`agents.json` from the template (pointed at wherever you actually cloned the
-repo — it doesn't assume any particular path), installs the Claude
-Code/Codex lifecycle hooks, and installs the bridge as a login LaunchAgent.
+`agents.json` from the template (agents launch in `~/Documents` by default —
+see "Default working directory" below), installs the Claude Code/Codex
+lifecycle hooks, and installs the bridge as a login LaunchAgent.
 The first time you use push-to-talk on that Mac, grant the Accessibility
 permission prompt, then restart the bridge (`launchctl unload` +
 `launchctl load` the plist, or just re-run `setup.sh`) since a process
@@ -352,18 +352,37 @@ Claude resolves to:
 
 ## Current firmware events
 
+Board -> bridge:
+
 ```json
 {"event":"agent.select","slot":1}
 {"event":"agent.focus","slot":1}
 {"event":"agent.reasoning.apply","slot":1,"effort":"HIGH"}
 {"event":"voice.hold.start","slot":1}
 {"event":"voice.hold.stop","slot":1}
+{"event":"agent.update.ack","slot":1}
 ```
 
 `agent.select` now also brings that slot's Terminal window to front if it
 already has a live session (confirmed working) — not just on first launch.
 `agent.focus` does the same thing without changing the selected slot, for a
-future case where those two need to be separate actions.
+future case where those two need to be separate actions. `agent.update.ack`
+is sent by the firmware every time it applies an `agent.update` (see below),
+so `sync_device` can confirm the screen actually picked up a push.
+
+Bridge -> board:
+
+```json
+{"event":"agent.update","slot":1,"name":"Maestro","family":"claude","status":"working","effort":"medium","activity":"","busy_elapsed_ms":12345}
+```
+
+`busy_elapsed_ms` is only nonzero while `status` is `working`/`thinking`,
+and measures the **current turn** — it resets to 0 on every
+`UserPromptSubmit`, even mid-turn. It's sent only on an actual change
+(status/effort/name, a slot freeing up, a key select, bridge startup, or the
+`sync` command) — never on a timer; the firmware advances the ramp locally
+between pushes using the elapsed time it derives from this value plus its
+own `millis()`.
 
 ## Intended future events
 
@@ -375,13 +394,32 @@ future case where those two need to be separate actions.
 
 ## TODO: token-consumption LED pattern
 
-Idea, not yet designed or implemented: once `busy_seconds`-based duration
-escalation (below) is working, layer in something similar driven by real
-token usage per slot — e.g. the LED pattern gets more intense/urgent the more
-tokens a turn has burned, not just how long it's taken. Needs the hook
-payload body to actually be parsed (today `do_POST` drains and discards it)
-and `transcript_path` read for per-turn `usage` data — a real lift, not a
-quick add. Revisit after duration escalation is proven out.
+Idea, not yet designed or implemented: layer in something driven by real
+token usage per slot on top of the existing `busy_elapsed_ms`-based duration
+escalation — e.g. the LED pattern gets more intense/urgent the more tokens a
+turn has burned, not just how long it's taken. Needs the hook payload body
+to actually be parsed further (today only a handful of fields are read) and
+`transcript_path` read for per-turn `usage` data — a real lift, not a quick
+add.
+
+## Running the tests
+
+```sh
+host/.venv/bin/pip install -r host/requirements-dev.txt
+host/.venv/bin/python -m pytest host/tests -q
+```
+
+Covers the registry transaction/locking, the hook-event status reducer
+(including `busy_elapsed_ms` and the `session_id` ownership guard), process
+liveness probing, the `config` subcommand, and an end-to-end integration
+test over a real pty + hook server. No board or running bridge needed.
+
+The firmware's pure LED logic (`firmware/neokey/led_model.h`) has its own
+host-side test, no Arduino toolchain required:
+
+```sh
+firmware/neokey/test/run.sh
+```
 
 ## Safety rule
 
