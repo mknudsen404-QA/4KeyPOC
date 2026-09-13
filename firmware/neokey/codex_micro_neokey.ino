@@ -1,4 +1,5 @@
 #include <Wire.h>
+#include <math.h>
 #include <ArduinoJson.h>
 #include "Adafruit_NeoKey_1x4.h"
 #include "seesaw_neopixel.h"
@@ -16,14 +17,29 @@ const uint8_t AGENT_SLOTS[AGENT_KEY_COUNT] = {1, 2, 3};
 
 Adafruit_NeoKey_1x4 neokey;
 
-// Once a slot has been "working"/"thinking" this long, start pulsing its LED
-// instead of holding it solid, so a long-running turn is visible at a glance.
-#define BUSY_PULSE_THRESHOLD_SEC 20
-#define BUSY_FAST_PULSE_THRESHOLD_SEC 60
+// Busy ("working"/"thinking") slots don't use a fixed color — they sweep
+// continuously from a cool blue (just started) to a warm ember orange (been
+// running a while), with the breathing pulse quickening alongside it, over
+// this many seconds. Past this point the color/pulse holds at the ember end
+// rather than continuing to climb.
+//
+// The hue sweep deliberately goes "the long way" around the color wheel —
+// up through purple/magenta — rather than the shorter way down through
+// cyan/green/yellow, because the latter passes directly through the exact
+// hues used by "done" (green) and "waiting"/"needs_input" (yellow), which
+// made a mid-ramp busy key briefly look like a different status entirely.
+// BUSY_END_HUE_DEG is intentionally > 360; busyHueDegrees() wraps it back
+// into range after interpolating, so it still lands on ember orange (20°).
+#define BUSY_RAMP_END_SEC 300
+#define BUSY_START_HUE_DEG 210.0f   // cool blue
+#define BUSY_END_HUE_DEG 380.0f     // wraps to 20° (ember orange) via purple/magenta
+#define BUSY_START_PULSE_MS 4000UL  // slow "giant heartbeat"
+#define BUSY_END_PULSE_MS 900UL     // quick pulse
 
 int selectedSlot = 0;          // 0 = none selected yet
 uint32_t slotColor[AGENT_KEY_COUNT] = {0, 0, 0};      // last agent.update color per agent key
 uint32_t slotBusySeconds[AGENT_KEY_COUNT] = {0, 0, 0};  // how long that slot has been busy
+bool slotIsBusy[AGENT_KEY_COUNT] = {false, false, false};  // status is "working" or "thinking"
 bool ptt_held = false;
 
 uint32_t colorForStatus(const char *status) {
@@ -31,16 +47,55 @@ uint32_t colorForStatus(const char *status) {
   // else, including needs_input, is routine, not a problem. needs_input in
   // particular covers benign things like Claude Code's first-run "do you
   // trust this folder?" prompt, which isn't an error and shouldn't look
-  // like one.
+  // like one. "blocked" is currently unreachable (no live signal sets it,
+  // see host/switchboard_bridge.py) but stays defined for when one does.
+  // "working"/"thinking" are handled dynamically in redrawAgentKeys() and
+  // never read from here.
   if (strcmp(status, "done") == 0) return 0x00FF00;         // green
-  if (strcmp(status, "working") == 0) return 0xFFAA00;      // amber
-  if (strcmp(status, "thinking") == 0) return 0x00FFFF;     // cyan
   if (strcmp(status, "waiting") == 0) return 0xFFFF00;      // yellow: wants attention, not urgent
   if (strcmp(status, "needs_input") == 0) return 0xFFFF00;  // yellow: wants attention, not urgent
   if (strcmp(status, "blocked") == 0) return 0xFF0000;      // red: something's actually wrong
   if (strcmp(status, "launched") == 0) return 0x0000FF;     // blue
   if (strcmp(status, "idle") == 0) return 0x202020;         // dim white
   return 0;  // empty / unknown = off
+}
+
+// Standard HSV->RGB conversion (h in degrees 0-360, s/v in 0-1), so busy
+// colors can sweep smoothly through hue instead of jumping between fixed
+// presets.
+uint32_t hsvToRgb(float h, float s, float v) {
+  float c = v * s;
+  float x = c * (1.0f - fabsf(fmodf(h / 60.0f, 2.0f) - 1.0f));
+  float m = v - c;
+  float r = 0, g = 0, b = 0;
+  if (h < 60.0f)       { r = c; g = x; b = 0; }
+  else if (h < 120.0f) { r = x; g = c; b = 0; }
+  else if (h < 180.0f) { r = 0; g = c; b = x; }
+  else if (h < 240.0f) { r = 0; g = x; b = c; }
+  else if (h < 300.0f) { r = x; g = 0; b = c; }
+  else                 { r = c; g = 0; b = x; }
+  return ((uint32_t)((r + m) * 255) << 16) | ((uint32_t)((g + m) * 255) << 8) | (uint32_t)((b + m) * 255);
+}
+
+// Smoothstep-eased progress (0..1) through the busy ramp: stays near 0 early,
+// near 1 late, with the crossfade happening around the midpoint — this is
+// what keeps the color/pulse flat at each end instead of ramping the instant
+// a turn starts.
+float busyRampProgress(uint32_t busySeconds) {
+  float t = (float)min(busySeconds, (uint32_t)BUSY_RAMP_END_SEC) / (float)BUSY_RAMP_END_SEC;
+  return t * t * (3.0f - 2.0f * t);
+}
+
+float busyHueDegrees(uint32_t busySeconds) {
+  float t = busyRampProgress(busySeconds);
+  float hue = BUSY_START_HUE_DEG + (BUSY_END_HUE_DEG - BUSY_START_HUE_DEG) * t;
+  if (hue >= 360.0f) hue -= 360.0f;
+  return hue;
+}
+
+unsigned long busyPulsePeriodMs(uint32_t busySeconds) {
+  float t = busyRampProgress(busySeconds);
+  return BUSY_START_PULSE_MS - (unsigned long)((BUSY_START_PULSE_MS - BUSY_END_PULSE_MS) * t);
 }
 
 // Dim a color when its key isn't the selected one, so selection is visible
@@ -53,12 +108,14 @@ uint32_t applySelection(uint32_t color, bool selected) {
   return ((uint32_t)(r / 4) << 16) | ((uint32_t)(g / 4) << 8) | (uint32_t)(b / 4);
 }
 
-// 0..1..0 triangle wave, floored at 0.35 so the pulse dims rather than blacks
-// out completely (staying legible even at its darkest point).
-float pulseFactor(unsigned long nowMs, unsigned long periodMs) {
+// Smooth raised-cosine breathing wave (0..1..0), floored at 0.35 so the pulse
+// dims rather than blacks out completely (staying legible even at its
+// darkest point). A cosine ease reads as an organic "breath"/"heartbeat"
+// rather than the mechanical blink of a linear triangle wave.
+float breathFactor(unsigned long nowMs, unsigned long periodMs) {
   float phase = (float)(nowMs % periodMs) / (float)periodMs;
-  float tri = phase < 0.5f ? phase * 2.0f : (1.0f - phase) * 2.0f;
-  return 0.35f + 0.65f * tri;
+  float wave = 0.5f - 0.5f * cosf(phase * 2.0f * (float)PI);
+  return 0.35f + 0.65f * wave;
 }
 
 uint32_t scaleColor(uint32_t color, float factor) {
@@ -72,11 +129,12 @@ void redrawAgentKeys() {
   unsigned long now = millis();
   for (uint8_t i = 0; i < AGENT_KEY_COUNT; i++) {
     bool isSelected = (selectedSlot == AGENT_SLOTS[i]);
-    uint32_t color = applySelection(slotColor[i], isSelected);
-    if (slotBusySeconds[i] >= BUSY_FAST_PULSE_THRESHOLD_SEC) {
-      color = scaleColor(color, pulseFactor(now, 500));   // stuck a while: fast pulse
-    } else if (slotBusySeconds[i] >= BUSY_PULSE_THRESHOLD_SEC) {
-      color = scaleColor(color, pulseFactor(now, 1500));  // been a bit: slow pulse
+    uint32_t baseColor = slotIsBusy[i]
+        ? hsvToRgb(busyHueDegrees(slotBusySeconds[i]), 1.0f, 1.0f)
+        : slotColor[i];
+    uint32_t color = applySelection(baseColor, isSelected);
+    if (slotIsBusy[i]) {
+      color = scaleColor(color, breathFactor(now, busyPulsePeriodMs(slotBusySeconds[i])));
     }
     neokey.pixels.setPixelColor(i, color);
   }
@@ -108,10 +166,12 @@ void pollIncomingSerial() {
             int slot = doc["slot"] | 0;
             const char *status = doc["status"] | "empty";
             uint32_t busySeconds = doc["busy_seconds"] | 0;
+            bool isBusy = strcmp(status, "working") == 0 || strcmp(status, "thinking") == 0;
             for (uint8_t i = 0; i < AGENT_KEY_COUNT; i++) {
               if (AGENT_SLOTS[i] == slot) {
                 slotColor[i] = colorForStatus(status);
                 slotBusySeconds[i] = busySeconds;
+                slotIsBusy[i] = isBusy;
               }
             }
           }

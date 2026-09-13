@@ -591,9 +591,16 @@ def strip_ansi(text: str) -> str:
 # codex/claude session transcript yet. Treat status auto-detection as
 # best-effort until verified live and expand this list from what's actually
 # observed (see Status Auto-Detection Plan in CODEX_MICRO_CONSOLE_DESIGN.md).
+#
+# No "error"/"traceback" -> blocked pattern here on purpose: matching those
+# words anywhere in the last few KB of a log fires on any benign mention
+# (grep output, "error handling", a since-fixed traceback scrolling by),
+# and was flipping the LED red constantly during ordinary subagent runs.
+# Real status changes come from actual hook events (CLAUDE_HOOK_STATUS /
+# CODEX_HOOK_STATUS below); "blocked" is unreached until something more
+# precise than a text-scan can set it.
 ACTIVITY_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\(y/n\)|\[y/n\]", re.IGNORECASE), "needs_input"),
-    (re.compile(r"\berror\b|\btraceback\b", re.IGNORECASE), "blocked"),
 ]
 
 TAIL_READ_BYTES = 4000
