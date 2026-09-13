@@ -29,6 +29,68 @@ It is still observe-only for mutating actions: it does not approve plans, run sl
 
 The bridge must be running on the Mac for the hardware to control anything. The ESP32 board is only the controller; the Mac-side bridge is the driver/daemon that listens for button events and launches or controls agents.
 
+## Architecture
+
+`switchboard_bridge.py` is a small entry-point shim; the whole
+implementation lives in `host/switchboard/`, split so the decision logic
+(what should a status change *do*) has no dependency on any real serial
+port, subprocess, or file:
+
+```text
+board (JSON lines)         CLI lifecycle hooks (HTTP POST)
+        |                              |
+        v                              v
+  device.lines()                hooks_server.py
+        |                              |
+        +----------> Bridge.submit() <-+
+                          |
+                    (single queue)
+                          |
+                    Bridge.step()  <---- the only place that touches
+                          |              the registry inside this process
+              +-----------+-----------+
+              |                       |
+      registry.transaction()     reduce() (pure)
+              |                       |
+        registry.json           [Effect, Effect, ...]
+                                      |
+                    +-----------------+-----------------+
+                    |         |          |         |
+              SendUpdate   Launch      Focus    VoiceKey
+                    |         |          |         |
+              device.send  terminal   terminal   terminal
+                          .open()+    .focus()   .post_key()
+                          build_launch()
+```
+
+| module | job |
+| --- | --- |
+| `model.py` | status vocabulary, effort mapping, hook status tables — pure data, no clock/I-O |
+| `events.py` | `BoardEvent`/`HookEvent`/`LivenessObserved`/`SlotRegistered`/`Shutdown`, `parse_board_line` |
+| `reducer.py` | `reduce(slots, state, event, now) -> (slots, effects)` — pure; every status-change rule lives here |
+| `clock.py` | `Clock` protocol + `SystemClock`/`FakeClock` |
+| `registry.py` | `Registry(path)` — load/save/transaction (the on-disk source of truth) |
+| `device.py` | `DeviceLink` protocol — `SerialDevice`/`FdDevice`/`FileDevice`/`FakeDevice`, plus `sync_device` |
+| `liveness.py` | `ProcessProber`/`FakeProber` — is the process behind a slot's terminal still running? |
+| `terminal.py` | `TerminalDriver` protocol — `AppleScriptTerminal`/`NullTerminal`/`FakeTerminal` (the only file that touches `osascript`) |
+| `launcher.py` | resolving a command/cwd/effort into a `LaunchPlan`, plus the `config` subcommand |
+| `hooks_server.py` | the hook HTTP listener — turns a POST into a `HookEvent`, nothing else |
+| `hooks_install.py` | registering hooks with Claude Code/Codex |
+| `bridge.py` | `Bridge` — owns the queue, the three producer threads, and `step()`/`startup_sync()` |
+| `cli.py` | `build_parser()` + every subcommand function; `main()` |
+
+## Adding a status
+
+1. Add the status to `STATUS_CHOICES`/`BUSY_STATUSES` in `model.py` if it's new.
+2. Add its hook mapping to `CLAUDE_HOOK_STATUS`/`CODEX_HOOK_STATUS` (also in
+   `model.py`) if a lifecycle hook should produce it.
+3. Add its color/pulse to `firmware/neokey/led_model.h`'s `colorForStatus`.
+4. Run `host/.venv/bin/python -m pytest host/tests -q` and
+   `firmware/neokey/test/run.sh` — both must stay green.
+
+(This is still multi-file for now; Phase 2.5's `status_table.py` collapses
+steps 1-3 into editing one table and running one generator command.)
+
 ## Voice hold (Claude-only, needs a venv)
 
 `voice.hold.start`/`voice.hold.stop` drive Claude Code's `/voice` hold-to-record
@@ -409,16 +471,38 @@ host/.venv/bin/pip install -r host/requirements-dev.txt
 host/.venv/bin/python -m pytest host/tests -q
 ```
 
-Covers the registry transaction/locking, the hook-event status reducer
-(including `busy_elapsed_ms` and the `session_id` ownership guard), process
-liveness probing, the `config` subcommand, and an end-to-end integration
-test over a real pty + hook server. No board or running bridge needed.
+Covers the registry transaction/locking, the pure reducer (including
+`busy_elapsed_ms` and the `session_id` ownership guard), process liveness
+probing, the CLI, and end-to-end integration tests over a real pty + hook
+server. No board or running bridge needed.
+
+### Golden traces
+
+`host/tests/golden/*.in.jsonl` each replay one sequence of board/hook/
+liveness events through a real `Bridge.step()` (no threads, no sleeps) and
+compare the exact device output to the matching `*.out.jsonl` — see
+`test_golden.py`'s module docstring for the input line grammar. To review
+and update them after a deliberate behavior change:
+
+```sh
+host/.venv/bin/python -m pytest host/tests/test_golden.py --update-golden
+git diff host/tests/golden  # review before committing
+```
+
+### Firmware
 
 The firmware's pure LED logic (`firmware/neokey/led_model.h`) has its own
 host-side test, no Arduino toolchain required:
 
 ```sh
 firmware/neokey/test/run.sh
+```
+
+A compile-only check (catches build breaks without a board attached; needs
+`arduino-cli`, the esp32 core, "Adafruit seesaw Library", and ArduinoJson):
+
+```sh
+firmware/neokey/test/compile.sh
 ```
 
 ## Safety rule

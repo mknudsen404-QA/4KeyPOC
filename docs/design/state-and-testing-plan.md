@@ -342,13 +342,23 @@ for the display firmware can come later; it needs the toolchain cached.
   firmware color math *before* changing them, then the new expectations.
 - Registry reconcile on bridge start.
 
-**Phase 1 — restructure (one to two weeks)**
-- Package split (§3.2), event queue + single owner, `Clock`/`DeviceLink`/
-  `TerminalDriver` seams, fake implementations.
-- Golden-trace integration tests, race regression, duplicate-launch
-  regression. CI.
-- Delete `LIVE_EFFORT_RESTART_ENABLED` dead code; dedupe AppleScript; parent
-  parser.
+**Phase 1 — restructure (one to two weeks) — done, `3437321`..`a32436b`**
+- Package split (§3.2: `host/switchboard/{model,events,reducer,clock,
+  registry,device,liveness,terminal,launcher,hooks_server,hooks_install,
+  bridge,cli}.py`), event queue + single owner (`Bridge.step()` is the only
+  code that touches the registry), `Clock`/`DeviceLink`/`TerminalDriver`
+  seams with fake implementations for every one.
+- Golden-trace tests (`host/tests/golden/*.in.jsonl`, 8 traces), the race
+  regressions ported from Phase 0 plus `test_hook_flood_never_resurrects_slot`,
+  a duplicate-launch-on-UNKNOWN regression. CI (`.github/workflows/ci.yml`,
+  macos-latest: host tests + firmware compile).
+- Deleted `LIVE_EFFORT_RESTART_ENABLED` and `restart_in_slot_terminal`
+  dead code; deduped the AppleScript tab-search fragment into one
+  `_find_tab_script` helper; `listen`'s flags now come from one shared
+  parent-parser helper instead of being duplicated on the root and
+  subparser.
+- `switchboard_bridge.py` is now a 7-line entry-point shim; 104 host tests
+  green (was 52 after Phase 0).
 
 **Phase 2 — product polish**
 - `doctor`; default-cwd config and `config` command; done-fade;
