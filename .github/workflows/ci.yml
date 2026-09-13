@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  host-and-firmware:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install host test dependencies
+        run: python -m pip install -r host/requirements-dev.txt
+
+      - name: Run host tests
+        run: python -m pytest host/tests -q -m "not hardware"
+
+      - name: Install arduino-cli
+        run: brew install arduino-cli
+
+      - name: Cache Arduino core/library data
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Arduino15
+          # Pinned to what's installed on the dev machine as of Phase 1
+          # (`arduino-cli core list`); bump this key when the core or
+          # library versions below change.
+          key: arduino15-esp32-3.3.11-seesaw-arduinojson-v7
+
+      - name: Install esp32 core
+        run: arduino-cli core install esp32:esp32@3.3.11
+
+      - name: Install firmware libraries
+        run: arduino-cli lib install "Adafruit seesaw Library" ArduinoJson
+
+      - name: Run firmware host tests (led_model, no board needed)
+        run: firmware/neokey/test/run.sh
+
+      - name: Compile-check the firmware sketch (no upload)
+        run: firmware/neokey/test/compile.sh
