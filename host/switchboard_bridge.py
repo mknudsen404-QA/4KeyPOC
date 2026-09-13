@@ -784,7 +784,7 @@ def _liveness_ticker(state: BridgeState, stop_event: threading.Event, interval: 
 
 
 HOOK_HOST = "127.0.0.1"
-HOOK_PORT = 8877
+HOOK_PORT = int(os.environ.get("SWITCHBOARD_HOOK_PORT", "8877"))
 HOOK_PATH_PREFIX = "/switchboard-hook/"
 # Substring used to identify Switchboard's own entries in ~/.claude/settings.json
 # and $CODEX_HOME/hooks.json so re-installing (or another tool's installer) never
