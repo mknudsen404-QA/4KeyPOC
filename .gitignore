@@ -24,3 +24,4 @@ host/agents.json
 
 # KiCad generator bytecode
 hardware/kicad/tools/__pycache__/
+__pycache__/

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import enum
 import fcntl
 import glob
 import http.server
@@ -47,6 +46,26 @@ except ImportError:
 
 HOST_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = HOST_DIR.parent
+sys.path.insert(0, str(HOST_DIR))  # so `import switchboard` works regardless of cwd
+
+from switchboard.model import (  # noqa: E402 - needs HOST_DIR on sys.path first
+    BUSY_STATUSES,
+    CLAUDE_EFFORT_VALUES,
+    CLAUDE_HOOK_STATUS,
+    CODEX_EFFORT_MAP,
+    CODEX_HOOK_EVENTS,
+    CODEX_HOOK_STATUS,
+    EFFORT_ALIASES,
+    STATUS_CHOICES,
+    Liveness,
+    command_with_effort,
+    effort_args,
+    hook_status_for as _hook_status_for,
+    normalize_effort,
+)
+from switchboard.model import agent_update_event as _model_agent_update_event
+from switchboard.model import set_status as _model_set_status
+from switchboard.model import slot_record as _model_slot_record
 DEFAULT_REGISTRY = HOST_DIR / "agent_registry.json"
 # agents.json is the user's own per-slot config (which CLI family/command each
 # agent key launches). It is personal/local, not checked in. agents.example.json
@@ -55,11 +74,6 @@ DEFAULT_REGISTRY = HOST_DIR / "agent_registry.json"
 USER_AGENTS_CONFIG = HOST_DIR / "agents.json"
 EXAMPLE_AGENTS_CONFIG = HOST_DIR / "agents.example.json"
 DEFAULT_AGENTS_CONFIG = USER_AGENTS_CONFIG if USER_AGENTS_CONFIG.exists() else EXAMPLE_AGENTS_CONFIG
-STATUS_CHOICES = ("empty", "launched", "idle", "thinking", "working", "waiting", "needs_input", "blocked", "done")
-# Statuses long enough to be worth escalating the LED for — the ones that
-# just mean "still going," not the ones that already stand out on their own
-# (needs_input/blocked are already flagged, done/idle aren't "busy").
-BUSY_STATUSES = ("working", "thinking")
 # macOS virtual keycode for the spacebar (used to drive Claude Code's /voice
 # hold-to-record mode). Voice hold is Claude-only for now — Codex's /voice
 # support, if any, hasn't been scoped.
@@ -76,9 +90,6 @@ KNOWN_COMMAND_PATHS = {
     ],
 }
 
-# The device's effort dial sends LOW/MED/HIGH/XHIGH/MAX (lowercased by the
-# bridge before storage). Neither CLI's effort vocabulary matches ours
-# exactly, so normalize first, then map per family.
 # Disabled: a live session was observed with only some Ctrl-C interrupts
 # actually landing (real AI TUIs appear to swallow Ctrl-C while a turn is
 # actively generating, only honoring it at idle) — a failed interrupt still
@@ -88,16 +99,6 @@ KNOWN_COMMAND_PATHS = {
 # back via a proper terminal emulator instead of guessing after a fixed
 # delay). Until then, effort changes only update the registry/screen.
 LIVE_EFFORT_RESTART_ENABLED = False
-
-EFFORT_ALIASES = {"med": "medium"}
-CLAUDE_EFFORT_VALUES = {"low", "medium", "high", "xhigh", "max"}
-# codex's `-c model_reasoning_effort=` only has "low" confirmed against a real
-# config.toml on this machine; medium/high are the standard OpenAI tiers and
-# very likely valid, but xhigh/max are not confirmed for this specific key
-# (a different key, multi_agent_reasoning_effort, does accept "xhigh") so they
-# are clamped to "high" rather than risk passing an unrecognized value at
-# launch. Revisit once a real codex session confirms the top tiers.
-CODEX_EFFORT_MAP = {"low": "low", "medium": "medium", "high": "high", "xhigh": "high", "max": "high"}
 
 BAUD_RATES = {
     9600: termios.B9600,
@@ -227,19 +228,17 @@ def slot_record(
     effort: str = "medium",
     terminal_tty: str | None = None,
 ) -> dict:
-    return {
-        "slot": slot,
-        "name": name,
-        "family": family,
-        "cwd": cwd,
-        "command": command,
-        "terminal_title": terminal_title,
-        "terminal_tty": terminal_tty,
-        "status": "launched",
-        "effort": normalize_effort(effort),
-        "activity": "terminal launched",
-        "last_launched_at": _now(),
-    }
+    return _model_slot_record(
+        slot=slot,
+        name=name,
+        family=family,
+        cwd=cwd,
+        command=command,
+        terminal_title=terminal_title,
+        effort=effort,
+        terminal_tty=terminal_tty,
+        now=_now(),
+    )
 
 
 def set_registry_slot(registry: dict, record: dict) -> None:
@@ -402,18 +401,10 @@ def registry_slot_summary(registry: dict, slot: int | str | None) -> str:
 def _set_status(record: dict, status: str) -> None:
     """Apply a status transition, tracking busy_since (turn-scoped ramp).
 
-    Every status assignment goes through this instead of writing
-    record["status"] directly, so busy_since starts the moment a slot
-    becomes busy and is cleared the moment it stops being busy.
+    Thin wrapper: the real logic is switchboard.model.set_status (pure,
+    takes `now` explicitly); this supplies the bridge's global clock.
     """
-    was_busy = record.get("status") in BUSY_STATUSES
-    record["status"] = status
-    record["last_updated_at"] = _now()
-    now_busy = status in BUSY_STATUSES
-    if now_busy and not was_busy:
-        record["busy_since"] = _now()
-    elif not now_busy:
-        record.pop("busy_since", None)
+    _model_set_status(record, status, _now())
 
 
 def update_registry_slot_status(
@@ -439,22 +430,7 @@ def update_registry_slot_status(
 
 
 def agent_update_event(record: dict) -> dict:
-    status = record.get("status", "empty")
-    busy_elapsed_ms = 0
-    if status in BUSY_STATUSES:
-        busy_since = record.get("busy_since")
-        if busy_since:
-            busy_elapsed_ms = max(0, round((_clock.now() - int(busy_since)) * 1000))
-    return {
-        "event": "agent.update",
-        "slot": record.get("slot"),
-        "name": record.get("name", f"Agent {record.get('slot', '')}"),
-        "family": record.get("family", "slot"),
-        "status": status,
-        "effort": record.get("effort", "medium"),
-        "activity": record.get("activity", ""),
-        "busy_elapsed_ms": busy_elapsed_ms,
-    }
+    return _model_agent_update_event(record, _clock.now())
 
 
 # Guards os.write(device_fd, ...) below. Without it, concurrent writers to
@@ -674,12 +650,6 @@ def run_listener(lines: Iterable[str], registry_path: Path, duration: float | No
     return 0
 
 
-class Liveness(enum.Enum):
-    ALIVE = "alive"
-    DEAD = "dead"
-    UNKNOWN = "unknown"
-
-
 _SHELL_COMMS = {"login", "-zsh", "zsh", "-bash", "bash", "sh", "-sh", "fish", "-fish"}
 
 # Indirection so tests can monkeypatch the process-liveness check.
@@ -795,27 +765,8 @@ HOOK_MARKER = f"{HOOK_HOST}:{HOOK_PORT}{HOOK_PATH_PREFIX}"
 # Real lifecycle hook events, not screen-scraped guesses — see
 # https://github.com/stephenleo/OpenMicro, which validated this approach.
 # PreToolUse only fires for AskUserQuestion (see CLAUDE_HOOK_EVENTS' matcher).
-CLAUDE_HOOK_STATUS = {
-    "SessionStart": "idle",
-    "UserPromptSubmit": "working",
-    "PreToolUse": "needs_input",
-    "PostToolUse": "working",
-    "Notification": "needs_input",
-    "Stop": "done",
-    "SessionEnd": "empty",
-}
-CODEX_HOOK_STATUS = {
-    "UserPromptSubmit": "working",
-    "PermissionRequest": "needs_input",
-    "PostToolUse": "working",
-    "Stop": "done",
-    # Unverified: SessionEnd appears alongside SessionStart/SubagentStart/
-    # SubagentStop in the codex binary's own strings, so it plausibly exists
-    # as a real hook event, but this hasn't been confirmed by actually
-    # observing it fire on `/exit`. If slots still don't free on Codex exit
-    # after install-hooks, this is the first thing to check.
-    "SessionEnd": "empty",
-}
+# CLAUDE_HOOK_STATUS/CODEX_HOOK_STATUS/CODEX_HOOK_EVENTS/hook_status_for now
+# live in switchboard.model (imported above) — they're pure lookup tables.
 
 CLAUDE_HOOK_EVENTS: dict[str, str | None] = {
     "SessionStart": None,
@@ -832,15 +783,6 @@ CLAUDE_HOOK_EVENTS: dict[str, str | None] = {
     "SubagentStart": None,
     "SubagentStop": None,
 }
-CODEX_HOOK_EVENTS = ("UserPromptSubmit", "PermissionRequest", "PostToolUse", "Stop", "SessionEnd")
-
-
-def _hook_status_for(family: str, event: str) -> str | None:
-    if family == "claude":
-        return CLAUDE_HOOK_STATUS.get(event)
-    if family == "codex":
-        return CODEX_HOOK_STATUS.get(event)
-    return None
 
 
 def _hook_command(event: str) -> str:
