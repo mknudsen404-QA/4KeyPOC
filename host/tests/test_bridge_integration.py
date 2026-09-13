@@ -1,3 +1,7 @@
+"""Race regressions that need real threads and a real pty/hook server — the
+things test_bridge.py's no-thread step()-only tests can't exercise.
+"""
+
 import json
 import os
 import select
@@ -10,7 +14,13 @@ from urllib.request import Request
 
 import pytest
 
-import switchboard_bridge as sb
+from switchboard.bridge import Bridge
+from switchboard.events import Shutdown
+from switchboard.liveness import FakeProber
+from switchboard.model import Liveness
+from switchboard.registry import Registry
+from switchboard.device import FdDevice
+from switchboard.terminal import FakeTerminal
 
 
 def free_port() -> int:
@@ -82,67 +92,61 @@ def hook(port, event, slot, **body):
 
 
 @pytest.fixture
-def bridge_harness(monkeypatch, registry_path, fake_clock):
-    """Spins up a real run_bridge_listener against a pty pair + a real hook
-    HTTP server on an ephemeral port. launch_slot_from_config is faked to
-    register a slot directly (no real Terminal/AppleScript); probe_liveness
-    is a controllable stub; focus_terminal_tab is a no-op.
-    """
+def bridge_harness(tmp_path, fake_clock):
+    """Spins up a real Bridge.run() against a pty pair (as the DeviceLink)
+    plus a real hooks_server HTTP server on an ephemeral port. Terminal and
+    liveness are fakes (no real Terminal.app/ps involved)."""
     master, slave = os.openpty()
     # Raw mode on the slave side: a pty's default line discipline echoes
     # anything written into master straight back out to master (as a real
     # terminal would echo typed input), which would otherwise show up as a
     # bogus extra "device line" on every press(). Real serial ports are
-    # configured the same way in configure_serial().
+    # configured the same way in device.py's _configure_serial().
     tty.setraw(slave)
     port = free_port()
-    monkeypatch.setattr(sb, "HOOK_PORT", port)
-    monkeypatch.setattr(sb, "focus_terminal_tab", lambda tty: True)
 
-    launch_calls = []
+    registry_path = tmp_path / "registry.json"
+    registry = Registry(registry_path)
+    device = FdDevice(read_fd=slave, write_fd=slave)
+    terminal = FakeTerminal()
+    prober = FakeProber()
+    launch_config = {
+        "agents": [
+            {"slot": n, "name": f"Agent {n}", "family": "claude", "command": "claude", "cwd": "/tmp"}
+            for n in range(1, 5)
+        ]
+    }
 
-    def fake_launch_slot_from_config(*, slot, config, registry_path, dry_run, no_open):
-        launch_calls.append(slot)
-        with sb.registry_transaction(registry_path) as registry:
-            registry.setdefault("slots", {})[str(slot)] = sb.slot_record(
-                slot=slot,
-                name=f"Agent {slot}",
-                family="claude",
-                cwd="/tmp",
-                command="claude",
-                terminal_title=f"Switchboard A{slot}",
-            )
-            registry["slots"][str(slot)]["terminal_tty"] = "/dev/ttysFAKE"
-        return f"Agent {slot} was empty, bridge launched it"
-
-    monkeypatch.setattr(sb, "launch_slot_from_config", fake_launch_slot_from_config)
-
-    probe_state = {"value": sb.Liveness.ALIVE}
-    monkeypatch.setattr(sb, "probe_liveness", lambda record: probe_state["value"])
+    bridge = Bridge(
+        registry=registry,
+        device=device,
+        terminal=terminal,
+        prober=prober,
+        clock=fake_clock,
+        launch_config=launch_config,
+        auto_launch=True,
+        dry_run=False,
+        no_open=False,
+    )
+    bridge.startup_sync()  # the initial 4 "empty" lines
 
     thread = threading.Thread(
-        target=sb.run_bridge_listener,
-        kwargs=dict(
-            lines=sb.serial_lines(slave, duration=5),
-            registry_path=registry_path,
-            auto_launch=True,
-            device_fd=slave,
-            liveness_interval=0.05,
-        ),
-        daemon=True,
+        target=bridge.run, kwargs=dict(liveness_interval=0.05, hook_port=port), daemon=True
     )
     thread.start()
 
     yield {
         "master": master,
-        "slave": slave,
         "port": port,
-        "probe_state": probe_state,
-        "launch_calls": launch_calls,
+        "prober": prober,
+        "terminal": terminal,
+        "registry": registry,
         "registry_path": registry_path,
         "clock": fake_clock,
+        "bridge": bridge,
     }
 
+    bridge.submit(Shutdown())
     thread.join(timeout=6)
     for fd in (master, slave):
         try:
@@ -188,38 +192,40 @@ def test_golden_launch_turn_stop(bridge_harness):
 
 def test_no_duplicate_launch_when_liveness_unknown(bridge_harness):
     master = bridge_harness["master"]
+    terminal = bridge_harness["terminal"]
 
     expect_lines(master, 4)  # startup sync
     press(master, 1)
     expect_lines(master, 1)  # launched
-    assert bridge_harness["launch_calls"] == [1]
+    assert len(terminal.opened) == 1
 
-    bridge_harness["probe_state"]["value"] = sb.Liveness.UNKNOWN
+    bridge_harness["prober"].answers["1"] = Liveness.UNKNOWN
     press(master, 1)
-    lines = drain_lines(master, timeout=0.4)
-    assert bridge_harness["launch_calls"] == [1]
+    drain_lines(master, timeout=0.4)
+    assert len(terminal.opened) == 1
 
 
 def test_dead_session_freed_after_two_ticks_and_led_cleared(bridge_harness):
     master = bridge_harness["master"]
-    registry_path = bridge_harness["registry_path"]
+    registry = bridge_harness["registry"]
 
     expect_lines(master, 4)  # startup sync
 
-    with sb.registry_transaction(registry_path) as registry:
-        registry.setdefault("slots", {})["1"] = sb.slot_record(
-            slot=1, name="Agent 1", family="claude", cwd="/tmp", command="claude",
-            terminal_title="Switchboard A1",
-        )
-        registry["slots"]["1"]["terminal_tty"] = "/dev/ttysFAKE"
+    with registry.transaction() as reg:
+        from switchboard.model import slot_record
 
-    bridge_harness["probe_state"]["value"] = sb.Liveness.DEAD
+        reg.setdefault("slots", {})["1"] = slot_record(
+            slot=1, name="Agent 1", family="claude", cwd="/tmp", command="claude",
+            terminal_title="Switchboard A1", terminal_tty="/dev/ttysFAKE", now=1_000_000,
+        )
+
+    bridge_harness["prober"].answers["1"] = Liveness.DEAD
     time.sleep(0.3)  # several 0.05s ticks: first DEAD, second confirms + frees
 
     lines = drain_lines(master, timeout=0.3)
     empties = [line for line in lines if line.get("slot") == 1 and line["status"] == "empty"]
     assert len(empties) == 1
-    assert "1" not in sb.load_registry(registry_path).get("slots", {})
+    assert "1" not in registry.load().get("slots", {})
 
 
 def test_foreign_session_hooks_ignored(bridge_harness):
@@ -241,7 +247,7 @@ def test_foreign_session_hooks_ignored(bridge_harness):
 def test_registry_race_no_resurrection(bridge_harness):
     master = bridge_harness["master"]
     port = bridge_harness["port"]
-    registry_path = bridge_harness["registry_path"]
+    registry = bridge_harness["registry"]
 
     expect_lines(master, 4)  # startup sync
     press(master, 1)
@@ -272,5 +278,54 @@ def test_registry_race_no_resurrection(bridge_harness):
 
     assert not errors
     time.sleep(0.2)  # let any trailing hook POST finish applying
-    registry = sb.load_registry(registry_path)  # must parse without raising
-    assert "1" not in registry.get("slots", {})
+    parsed = registry.load()  # must parse without raising
+    assert "1" not in parsed.get("slots", {})
+
+
+def test_hook_flood_never_resurrects_slot(bridge_harness):
+    """8 threads x 50 PostToolUse POSTs racing a SessionEnd from a 9th
+    thread; after everything settles, the slot must stay absent and no
+    agent.update for it may appear after the final "empty" line — the
+    single-worker queue makes this a strict ordering guarantee."""
+    master = bridge_harness["master"]
+    port = bridge_harness["port"]
+    registry = bridge_harness["registry"]
+
+    expect_lines(master, 4)  # startup sync
+    press(master, 1)
+    expect_lines(master, 1)  # launched
+    hook(port, "SessionStart", 1, session_id="s-flood")
+
+    errors = []
+
+    def hammer():
+        try:
+            for _ in range(50):
+                hook(port, "PostToolUse", 1, session_id="s-flood", tool_name="Bash")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def end_session():
+        time.sleep(0.02)
+        try:
+            hook(port, "SessionEnd", 1, session_id="s-flood", reason="exit")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=hammer) for _ in range(8)]
+    threads.append(threading.Thread(target=end_session))
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors
+    lines = drain_lines(master, timeout=0.5)
+    assert "1" not in registry.load().get("slots", {})
+
+    empty_indices = [i for i, line in enumerate(lines) if line.get("slot") == 1 and line["status"] == "empty"]
+    assert empty_indices, "expected at least one 'empty' line for slot 1"
+    last_empty = empty_indices[-1]
+    assert all(
+        not (line.get("slot") == 1 and line["status"] != "empty") for line in lines[last_empty + 1 :]
+    ), f"a non-empty update for slot 1 appeared after its 'empty' line: {lines[last_empty:]}"

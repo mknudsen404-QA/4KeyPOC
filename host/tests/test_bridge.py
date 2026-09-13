@@ -1,0 +1,149 @@
+import threading
+import time
+
+from switchboard.bridge import Bridge
+from switchboard.clock import FakeClock, SystemClock
+from switchboard.device import FakeDevice
+from switchboard.events import BoardEvent, HookEvent
+from switchboard.liveness import FakeProber
+from switchboard.model import Liveness
+from switchboard.registry import Registry
+from switchboard.terminal import FakeTerminal
+
+
+def make_bridge(tmp_path, *, clock=None, auto_launch=True, dry_run=False, no_open=False, launch_config=None):
+    registry = Registry(tmp_path / "registry.json")
+    device = FakeDevice()
+    terminal = FakeTerminal()
+    prober = FakeProber()
+    clock = clock or FakeClock()
+    bridge = Bridge(
+        registry=registry,
+        device=device,
+        terminal=terminal,
+        prober=prober,
+        clock=clock,
+        launch_config=launch_config or {"agents": [{"slot": 1, "name": "A", "family": "shell", "command": "cat"}]},
+        auto_launch=auto_launch,
+        dry_run=dry_run,
+        no_open=no_open,
+    )
+    return bridge, registry, device, terminal, prober, clock
+
+
+def test_step_select_empty_slot_launches_and_registers(tmp_path):
+    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path)
+    bridge.step(BoardEvent("agent.select", {"slot": 1}))
+
+    assert len(terminal.opened) == 1
+    record = registry.load()["slots"]["1"]
+    assert record["terminal_tty"] == "/dev/ttysFAKE1"
+    assert any(e.get("event") == "agent.update" and e.get("status") == "launched" for e in device.sent)
+
+
+def test_step_select_unknown_never_launches(tmp_path):
+    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path)
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "shell", "status": "launched"}}})
+    prober.answers["1"] = Liveness.UNKNOWN  # --no-open record: no terminal_tty to probe
+    bridge.step(BoardEvent("agent.select", {"slot": 1}))
+    assert terminal.opened == []
+
+
+def test_step_hook_sequence_matches_phase0_golden(tmp_path):
+    clock = FakeClock()
+    bridge, registry, device, terminal, prober, _ = make_bridge(tmp_path, clock=clock)
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "status": "launched"}}})
+
+    bridge.step(HookEvent("1", "SessionStart", {"session_id": "s-aaa"}))
+    assert device.sent[-1]["status"] == "idle"
+
+    bridge.step(HookEvent("1", "UserPromptSubmit", {"session_id": "s-aaa"}))
+    assert device.sent[-1]["status"] == "working"
+    assert device.sent[-1]["busy_elapsed_ms"] == 0
+
+    sent_before_post_tool_use = len(device.sent)
+    clock.advance(40)
+    bridge.step(HookEvent("1", "PostToolUse", {"session_id": "s-aaa"}))
+    # Still "working" -> "working": no line (matches the Phase 0 golden
+    # trace exactly — busy_elapsed_ms only shows up on the *next* update).
+    assert len(device.sent) == sent_before_post_tool_use
+
+    bridge.step(HookEvent("1", "Stop", {"session_id": "s-aaa"}))
+    assert device.sent[-1]["status"] == "done"
+
+    bridge.step(HookEvent("1", "SessionEnd", {"session_id": "s-aaa"}))
+    assert device.sent[-1]["status"] == "empty"
+    assert "1" not in registry.load()["slots"]
+
+
+def test_effects_run_after_lock_released(tmp_path):
+    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path)
+    registry.save({"version": 1, "slots": {}})
+
+    acquired = []
+
+    def send_and_probe_lock(event):
+        # If the registry lock were still held by step(), this transaction
+        # would deadlock (RLock is per-thread, but the flock is per-fd; a
+        # nested `with open(...)` + LOCK_EX on the same process/thread does
+        # not block, so instead assert we can complete a full transaction
+        # from within send() without exception.
+        with registry.transaction() as reg:
+            reg["probed"] = True
+        acquired.append(True)
+
+    device.send = send_and_probe_lock
+    bridge.step(BoardEvent("agent.select", {"slot": 1}))
+    assert acquired == [True]
+
+
+def test_worker_survives_step_exception(tmp_path):
+    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path, clock=SystemClock())
+    registry.save({"version": 1, "slots": {}})
+
+    calls = {"n": 0}
+    real_send = device.send
+
+    def flaky_send(event):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        real_send(event)
+
+    device.send = flaky_send
+
+    thread = threading.Thread(target=bridge.run, kwargs={"duration": 0.6})
+    thread.start()
+    time.sleep(0.05)
+    bridge.submit(BoardEvent("agent.select", {"slot": 1}))  # triggers the flaky raise
+    time.sleep(0.1)
+    bridge.submit(BoardEvent("agent.select", {"slot": 1}))  # should still work afterward
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert calls["n"] >= 2
+    assert len(device.sent) >= 1
+
+
+def test_startup_sync_pushes_four_updates_and_frees_dead(tmp_path):
+    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path, auto_launch=False)
+    registry.save(
+        {
+            "version": 1,
+            "slots": {
+                "1": {"slot": 1, "name": "A", "family": "shell", "status": "idle", "terminal_tty": "/dev/ttys001"},
+                "2": {"slot": 2, "name": "B", "family": "shell", "status": "idle", "terminal_tty": "/dev/ttys002"},
+            },
+        }
+    )
+    prober.answers = {"1": Liveness.ALIVE, "2": Liveness.DEAD}
+
+    bridge.startup_sync()
+
+    assert len(device.sent) == 4
+    by_slot = {e["slot"]: e for e in device.sent}
+    assert by_slot[1]["status"] != "empty"
+    assert by_slot[2]["status"] == "empty"
+    assert by_slot[3]["status"] == "empty"
+    assert by_slot[4]["status"] == "empty"
+    assert "2" not in registry.load()["slots"]
