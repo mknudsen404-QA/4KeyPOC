@@ -164,10 +164,12 @@ class FdDevice:
             ready, _, _ = select.select([self.read_fd], [], [], 0.25)
             if not ready:
                 continue
-            try:
-                chunk = os.read(self.read_fd, 1024)
-            except OSError:
-                return
+            # No try/except here (matching SerialDevice.lines()): a genuine
+            # read failure should propagate to the caller (Bridge.run()'s
+            # reader thread submits Shutdown(error=exc)), not vanish —
+            # silently returning here once made the reader thread stop
+            # forever with zero visibility into why.
+            chunk = os.read(self.read_fd, 1024)
             if not chunk:
                 continue
             buffer += chunk

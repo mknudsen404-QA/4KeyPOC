@@ -163,6 +163,7 @@ class Bridge:
                         self.log(parsed)
                         continue
                     self.submit(parsed)
+                self.log("reader thread: device.lines() ended without an exception")
             except OSError as exc:
                 self.submit(Shutdown(error=exc))
 
@@ -194,6 +195,7 @@ class Bridge:
                     continue
                 if isinstance(event, Shutdown):
                     self.last_shutdown_error = event.error
+                    self.log(f"worker: got Shutdown(error={event.error!r}), stopping run()")
                     return 0
                 try:
                     self.step(event)
