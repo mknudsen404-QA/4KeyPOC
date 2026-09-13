@@ -11,7 +11,7 @@ Three real KiCad projects for the tiered USB agent-status keypad line described 
 | `12key/` | 12 (11 agent slots + PTT) | 3 × 4 | THE CARROT | 87.2 × 108.7 mm |
 
 The `4key` board is the drop-in electrical equivalent of the currently shipping
-`firmware/neokey/switchboard_neokey.ino` build: same 4 keys, same 3-agent + 1
+`firmware/neokey/neokey.ino` build: same 4 keys, same 3-agent + 1
 push-to-talk split, same USB-serial JSON-lines protocol to
 `host/switchboard_bridge.py`. It replaces the purchased Adafruit NeoKey 1x4
 (and its Seesaw microcontroller) with one XL9555-class I2C expander and one

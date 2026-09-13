@@ -124,6 +124,8 @@ re-flashing every board with a new stub.
 
 ### Spike findings (resolved 2026-09-12)
 
+(`codex_micro_neokey.ino` is the pre-rename name of `firmware/neokey/neokey.ino`.)
+
 - **Flash/partition budget: a non-issue.** Read the working NeoKey board's
   flash chip directly with esptool (`flash-id`, read-only — no write, no
   firmware change): ESP32-S3 with **16MB flash / 8MB PSRAM**. The

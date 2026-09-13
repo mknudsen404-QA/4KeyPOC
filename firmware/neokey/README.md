@@ -34,6 +34,9 @@ built and run with a plain host C++ compiler:
 firmware/neokey/test/run.sh
 ```
 
+To catch build breaks without a board attached, `firmware/neokey/test/compile.sh`
+does a compile-only `arduino-cli compile` of the whole sketch (no upload).
+
 ## A real hardware quirk this code works around
 
 `Adafruit_NeoKey_1x4::begin()` (and the `seesaw_NeoPixel::begin()` it calls

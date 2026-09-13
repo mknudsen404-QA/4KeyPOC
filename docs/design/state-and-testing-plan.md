@@ -1,7 +1,7 @@
 # Switchboard: state bugs, design review, and testing plan
 
 Captured: 2026-09-13. Scope: `host/switchboard_bridge.py` (1,649 lines) and
-`firmware/neokey/switchboard_neokey.ino` (262 lines). The ESP-IDF display
+`firmware/neokey/neokey.ino` (262 lines). The ESP-IDF display
 firmware is out of scope for this pass.
 
 ## 1. What the symptoms actually are
