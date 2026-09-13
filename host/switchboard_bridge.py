@@ -257,6 +257,9 @@ def load_agents_config(path: Path = DEFAULT_AGENTS_CONFIG) -> dict:
     return data
 
 
+DEFAULT_CWD = "~/Documents"
+
+
 def agent_config_for_slot(config: dict | None, slot: int) -> dict:
     agents = (config or {}).get("agents", [])
     for agent in agents:
@@ -266,9 +269,14 @@ def agent_config_for_slot(config: dict | None, slot: int) -> dict:
         "slot": slot,
         "name": f"Agent {slot}",
         "family": "codex",
-        "cwd": str(PROJECT_ROOT),
         "command": "codex",
     }
+
+
+def resolve_agent_cwd(agent: dict, config: dict | None) -> str:
+    """Resolution order: slot cwd -> defaults.cwd -> ~/Documents."""
+    cwd = agent.get("cwd") or (config or {}).get("defaults", {}).get("cwd") or DEFAULT_CWD
+    return str(Path(cwd).expanduser().resolve())
 
 
 def launch_slot_from_config(
@@ -284,7 +292,7 @@ def launch_slot_from_config(
         slot=slot,
         name=agent.get("name", f"Agent {slot}"),
         family=agent.get("family", "codex"),
-        cwd=agent.get("cwd", str(PROJECT_ROOT)),
+        cwd=resolve_agent_cwd(agent, config),
         command=agent.get("command", "codex"),
         title=agent.get("title"),
         effort=agent.get("effort", "medium"),
@@ -1322,8 +1330,17 @@ def launch_agent(args: argparse.Namespace) -> int:
 
     cwd = str(Path(args.cwd).expanduser().resolve())
     if not Path(cwd).exists():
-        print(f"Working folder does not exist: {cwd}", file=sys.stderr)
-        return 2
+        documents_dir = Path.home() / "Documents"
+        if documents_dir in Path(cwd).parents or Path(cwd) == documents_dir:
+            Path(cwd).mkdir(parents=True, exist_ok=True)
+            print(f"Created {cwd}")
+        else:
+            print(
+                f"Working folder does not exist: {cwd}. Set it with: "
+                f"switchboard_bridge.py config --slot {slot} --cwd PATH",
+                file=sys.stderr,
+            )
+            return 2
 
     try:
         base_command = resolve_command(args.command)
@@ -1375,27 +1392,22 @@ def launch_agent(args: argparse.Namespace) -> int:
 
 
 def launch_all(args: argparse.Namespace) -> int:
-    with Path(args.config).expanduser().open("r", encoding="utf-8") as handle:
-        config = json.load(handle)
+    config = load_agents_config(Path(args.config))
     agents = config.get("agents", [])
     if not isinstance(agents, list):
         print("Config must contain an agents list.", file=sys.stderr)
         return 2
     for agent in agents:
-        child = argparse.Namespace(
-            slot=agent["slot"],
-            name=agent["name"],
-            family=agent.get("family", "codex"),
-            cwd=agent.get("cwd", str(PROJECT_ROOT)),
-            command=agent.get("command", args.command),
-            title=agent.get("title"),
-            registry=args.registry,
+        message = launch_slot_from_config(
+            slot=int(agent["slot"]),
+            config=config,
+            registry_path=args.registry,
             dry_run=args.dry_run,
             no_open=args.no_open,
         )
-        result = launch_agent(child)
-        if result:
-            return result
+        print(message)
+        if "launch failed" in message:
+            return 2
     return 0
 
 
@@ -1432,6 +1444,95 @@ def clear_slot(args: argparse.Namespace) -> int:
         print(f"Cleared Agent {args.slot}")
     else:
         print(f"Agent {args.slot} was already empty")
+    return 0
+
+
+def _write_agents_config(path: Path, config: dict) -> None:
+    path = path.expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        json.dump(config, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
+def _validate_or_create_cwd(cwd_str: str) -> str:
+    """Resolve cwd_str, creating it if missing and it's under ~/Documents.
+
+    Raises ValueError (with a user-facing message) if it's missing and
+    outside ~/Documents — creating an arbitrary path elsewhere on the
+    filesystem on the user's behalf is not something to do silently.
+    """
+    resolved = Path(cwd_str).expanduser().resolve()
+    if not resolved.exists():
+        documents_dir = Path.home() / "Documents"
+        if resolved == documents_dir or documents_dir in resolved.parents:
+            resolved.mkdir(parents=True, exist_ok=True)
+        else:
+            raise ValueError(f"Working folder does not exist: {resolved}")
+    return str(resolved)
+
+
+def config_command(args: argparse.Namespace) -> int:
+    agents_config_path = Path(args.agents_config).expanduser()
+    if agents_config_path.exists():
+        config = load_agents_config(agents_config_path)
+    elif EXAMPLE_AGENTS_CONFIG.exists():
+        config = load_agents_config(EXAMPLE_AGENTS_CONFIG)
+    else:
+        config = {"agents": []}
+
+    if args.show:
+        print(json.dumps(config, indent=2, sort_keys=True))
+        return 0
+
+    if args.default_cwd is not None:
+        try:
+            resolved = _validate_or_create_cwd(args.default_cwd)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        config.setdefault("defaults", {})["cwd"] = resolved
+        _write_agents_config(agents_config_path, config)
+        print(f"Default cwd set to {resolved}.")
+        print("Takes effect on each slot's next launch.")
+        return 0
+
+    if args.slot is None:
+        print("Specify --slot, --default-cwd, or --show.", file=sys.stderr)
+        return 2
+
+    agents = config.setdefault("agents", [])
+    agent = next((a for a in agents if int(a.get("slot", 0)) == args.slot), None)
+    if agent is None:
+        agent = {"slot": args.slot}
+        agents.append(agent)
+
+    if args.cwd is not None:
+        try:
+            agent["cwd"] = _validate_or_create_cwd(args.cwd)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    if args.name is not None:
+        agent["name"] = args.name
+    if args.family is not None:
+        agent["family"] = args.family
+    if args.command is not None:
+        agent["command"] = args.command
+    if args.effort is not None:
+        agent["effort"] = normalize_effort(args.effort)
+
+    _write_agents_config(agents_config_path, config)
+    print(
+        f"Slot {args.slot}: {agent.get('name', f'Agent {args.slot}')} "
+        f"({agent.get('family', 'codex')}) command={agent.get('command', 'codex')!r} "
+        f"cwd={resolve_agent_cwd(agent, config)}"
+    )
+    print("Takes effect on this slot's next launch.")
     return 0
 
 
@@ -1609,7 +1710,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--family", default="codex", choices=("codex", "claude", "shell"),
         help="'shell' is a no-cost test family (no effort flags added) for a harmless command like cat",
     )
-    launch_parser.add_argument("--cwd", default=str(PROJECT_ROOT))
+    launch_parser.add_argument("--cwd", default=DEFAULT_CWD)
     launch_parser.add_argument("--command", default="codex")
     launch_parser.add_argument("--title")
     launch_parser.add_argument("--effort", default="medium", help="low, medium, high, xhigh, or max")
@@ -1620,7 +1721,6 @@ def build_parser() -> argparse.ArgumentParser:
     launch_all_parser.set_defaults(func=launch_all)
     launch_all_parser.add_argument("--registry", type=Path, default=argparse.SUPPRESS)
     launch_all_parser.add_argument("--config", default=str(HOST_DIR / "agents.example.json"))
-    launch_all_parser.add_argument("--command", default="codex")
     launch_all_parser.add_argument("--dry-run", action="store_true")
     launch_all_parser.add_argument("--no-open", action="store_true")
 
@@ -1640,6 +1740,18 @@ def build_parser() -> argparse.ArgumentParser:
     clear_parser.set_defaults(func=clear_slot)
     clear_parser.add_argument("--registry", type=Path, default=argparse.SUPPRESS)
     clear_parser.add_argument("--slot", type=int, required=True)
+
+    config_parser = subcommands.add_parser("config", help="Edit host/agents.json (per-slot launch config)")
+    config_parser.set_defaults(func=config_command)
+    config_parser.add_argument("--agents-config", type=Path, default=USER_AGENTS_CONFIG)
+    config_parser.add_argument("--slot", type=int)
+    config_parser.add_argument("--cwd")
+    config_parser.add_argument("--name")
+    config_parser.add_argument("--family", choices=("codex", "claude", "shell"))
+    config_parser.add_argument("--command")
+    config_parser.add_argument("--effort", help="low, medium, high, xhigh, or max")
+    config_parser.add_argument("--default-cwd")
+    config_parser.add_argument("--show", action="store_true")
 
     hooks_parser = subcommands.add_parser(
         "install-hooks",

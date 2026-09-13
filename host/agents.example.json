@@ -1,10 +1,13 @@
 {
+  "defaults": {
+    "cwd": "~/Documents"
+  },
   "agents": [
     {
       "slot": 1,
       "name": "Maestro",
       "family": "codex",
-      "cwd": "/Users/matthewknudsen/Documents/Codex-Micro-Matt/Codex_Micro_Display",
+      "cwd": "~/Documents",
       "command": "codex",
       "title": "Switchboard Agent 1 — Maestro"
     },
@@ -12,7 +15,7 @@
       "slot": 2,
       "name": "Scout",
       "family": "codex",
-      "cwd": "/Users/matthewknudsen/Documents/Codex-Micro-Matt/Codex_Micro_Display",
+      "cwd": "~/Documents",
       "command": "codex",
       "title": "Switchboard Agent 2 — Scout"
     },
@@ -20,7 +23,7 @@
       "slot": 3,
       "name": "Claude",
       "family": "claude",
-      "cwd": "/Users/matthewknudsen/Documents/Codex-Micro-Matt/Codex_Micro_Display",
+      "cwd": "~/Documents",
       "command": "claude",
       "title": "Switchboard Agent 3 — Claude"
     },
@@ -28,7 +31,7 @@
       "slot": 4,
       "name": "Forge",
       "family": "codex",
-      "cwd": "/Users/matthewknudsen/Documents/Codex-Micro-Matt/Codex_Micro_Display",
+      "cwd": "~/Documents",
       "command": "codex",
       "title": "Switchboard Agent 4 — Forge"
     }

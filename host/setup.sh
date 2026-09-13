@@ -51,20 +51,9 @@ ok "pyobjc-framework-Quartz (needed for real push-to-talk hold/release)"
 # --- agents.json -----------------------------------------------------------
 step "Configuring agent slots"
 if [ ! -f "$HOST_DIR/agents.json" ]; then
-  python3 - "$HOST_DIR" <<'PYEOF'
-import json
-import sys
-from pathlib import Path
-
-host_dir = Path(sys.argv[1])
-project_root = host_dir.parent
-example = json.loads((host_dir / "agents.example.json").read_text())
-for agent in example.get("agents", []):
-    agent["cwd"] = str(project_root)
-(host_dir / "agents.json").write_text(json.dumps(example, indent=2) + "\n")
-PYEOF
-  ok "Created host/agents.json, pointed at this machine's project path"
-  warn "Edit host/agents.json if you want a different CLI/path mix per slot"
+  cp "$HOST_DIR/agents.example.json" "$HOST_DIR/agents.json"
+  ok "Created host/agents.json (agents launch in ~/Documents by default)"
+  warn "Edit host/agents.json, or use 'switchboard_bridge.py config', for a different CLI/path mix per slot"
 else
   skip "agents.json"
 fi

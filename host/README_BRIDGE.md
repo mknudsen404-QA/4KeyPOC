@@ -113,14 +113,15 @@ python3 host/switchboard_bridge.py --sample
 
 ## Launch one agent slot
 
-This registers Agent 1 and opens a new macOS Terminal window running Codex in the firmware project folder:
+This registers Agent 1 and opens a new macOS Terminal window running Codex.
+Agents launch in `~/Documents` by default (`--cwd` overrides it for one slot,
+or use `switchboard_bridge.py config --default-cwd PATH` for all of them):
 
 ```sh
 python3 host/switchboard_bridge.py launch \
   --slot 1 \
   --name Maestro \
   --family codex \
-  --cwd /Users/matthewknudsen/Documents/Codex-Micro-Matt/Codex_Micro_Display \
   --command codex
 ```
 
@@ -148,7 +149,8 @@ python3 host/switchboard_bridge.py launch \
 
 Auto-launch and `launch-all` both read `host/agents.json` if it exists, falling
 back to the checked-in `host/agents.example.json` template otherwise.
-`agents.json` is yours — not checked in, safe to edit freely. Each slot is:
+`agents.json` is yours — not checked in, safe to edit freely (or edit it with
+`switchboard_bridge.py config`, see below). Each slot is:
 
 ```json
 { "slot": 1, "name": "Maestro", "family": "codex", "cwd": "...", "command": "codex", "effort": "medium" }
@@ -157,7 +159,20 @@ back to the checked-in `host/agents.example.json` template otherwise.
 Change `family` (`codex` or `claude`) and `command` per slot to control the
 codex/claude mix — nothing stops all four slots from being the same family, or
 all different. `effort` is optional (defaults to `medium`) and sets the
-starting reasoning effort for that slot's session.
+starting reasoning effort for that slot's session. `cwd` resolves in this
+order: the slot's own `cwd` -> the top-level `"defaults": {"cwd": "..."}` ->
+`~/Documents`. A missing `cwd` under `~/Documents` is created automatically;
+anywhere else, launching fails with a hint to fix it via `config`.
+
+Edit a slot (or the shared default) without hand-editing JSON:
+
+```sh
+python3 host/switchboard_bridge.py config --slot 1 --name Maestro --family codex --command codex --cwd ~/Documents/my-project
+python3 host/switchboard_bridge.py config --default-cwd ~/Documents
+python3 host/switchboard_bridge.py config --show
+```
+
+Changes take effect on that slot's next launch, not any session already running.
 
 ## Launch the four-slot example
 
