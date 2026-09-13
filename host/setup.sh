@@ -5,26 +5,52 @@
 # agents.json) rather than clobbering it.
 set -euo pipefail
 
+# --- output helpers -----------------------------------------------------
+if [ -t 1 ]; then
+  BOLD=$'\033[1m'; DIM=$'\033[2m'; RESET=$'\033[0m'
+  GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'; CYAN=$'\033[36m'
+else
+  BOLD=""; DIM=""; RESET=""; GREEN=""; YELLOW=""; RED=""; CYAN=""
+fi
+
+step()  { printf '%s%s==>%s %s\n' "$BOLD" "$CYAN" "$RESET" "$1"; }
+ok()    { printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$1"; }
+skip()  { printf '  %s-%s %s\n' "$DIM" "$RESET" "$1${DIM} (already set up, skipping)${RESET}"; }
+warn()  { printf '  %s!%s %s\n' "$YELLOW" "$RESET" "$1"; }
+die()   { printf '%s✗ %s%s\n' "$RED" "$1" "$RESET" >&2; exit 1; }
+
+trap 'die "Setup failed. Nothing after this point was applied — safe to fix the issue above and re-run ./setup.sh."' ERR
+
 HOST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$HOST_DIR")"
 
-echo "== Switchboard bridge setup =="
-echo "Project root: $PROJECT_ROOT"
-echo
+printf '%s%sSwitchboard Bridge Setup%s\n' "$BOLD" "$CYAN" "$RESET"
+printf '%s%s%s\n\n' "$DIM" "$PROJECT_ROOT" "$RESET"
 
+# --- prerequisites -------------------------------------------------------
+step "Checking prerequisites"
+[ "$(uname -s)" = "Darwin" ] || die "This bridge is macOS-only (uses AppleScript, Quartz, and launchctl)."
+command -v python3 >/dev/null 2>&1 || die "python3 not found. Install it (e.g. via Homebrew) and re-run."
+ok "macOS detected"
+ok "python3 found: $(command -v python3)"
+
+# --- virtualenv ------------------------------------------------------------
+step "Setting up the Python virtualenv"
 if [ ! -d "$HOST_DIR/.venv" ]; then
-  echo "-> Creating virtualenv (host/.venv)..."
   python3 -m venv "$HOST_DIR/.venv"
+  ok "Created host/.venv"
 else
-  echo "-> Virtualenv already exists, skipping."
+  skip "Virtualenv"
 fi
 
-echo "-> Installing dependencies (pyobjc-framework-Quartz, needed for real push-to-talk hold/release)..."
+step "Installing dependencies"
 "$HOST_DIR/.venv/bin/pip" install --quiet --upgrade pip
 "$HOST_DIR/.venv/bin/pip" install --quiet pyobjc-framework-Quartz pyobjc-framework-ApplicationServices
+ok "pyobjc-framework-Quartz (needed for real push-to-talk hold/release)"
 
+# --- agents.json -----------------------------------------------------------
+step "Configuring agent slots"
 if [ ! -f "$HOST_DIR/agents.json" ]; then
-  echo "-> Creating agents.json from the template, pointed at this machine's project path..."
   python3 - "$HOST_DIR" <<'PYEOF'
 import json
 import sys
@@ -37,24 +63,39 @@ for agent in example.get("agents", []):
     agent["cwd"] = str(project_root)
 (host_dir / "agents.json").write_text(json.dumps(example, indent=2) + "\n")
 PYEOF
-  echo "   host/agents.json created — edit it if you want a different CLI/path mix per slot."
+  ok "Created host/agents.json, pointed at this machine's project path"
+  warn "Edit host/agents.json if you want a different CLI/path mix per slot"
 else
-  echo "-> agents.json already exists, leaving it alone."
+  skip "agents.json"
 fi
 
-echo "-> Installing Claude Code / Codex lifecycle hooks (idempotent, merges into existing settings)..."
-"$HOST_DIR/.venv/bin/python3" "$HOST_DIR/switchboard_bridge.py" install-hooks
+# --- hooks -------------------------------------------------------------
+step "Wiring up Claude Code / Codex lifecycle hooks"
+"$HOST_DIR/.venv/bin/python3" "$HOST_DIR/switchboard_bridge.py" install-hooks | sed 's/^/  /'
+ok "Hooks installed (idempotent — merges into your existing settings)"
 
-echo "-> Installing the bridge as a login LaunchAgent..."
-"$HOST_DIR/.venv/bin/python3" "$HOST_DIR/install_bridge_launch_agent.py"
+# --- launch agent --------------------------------------------------------
+step "Installing the login LaunchAgent"
+"$HOST_DIR/.venv/bin/python3" "$HOST_DIR/install_bridge_launch_agent.py" | sed 's/^/  /'
+ok "Bridge will now start automatically at login"
 
-echo
-echo "== Done =="
-echo "The bridge now runs automatically at login and waits for the board."
-echo "Plug in the ESP32-S3 + NeoKey board and press an agent key to test."
-echo
-echo "The first time you use push-to-talk, macOS will prompt for Accessibility"
-echo "permission for python3 — grant it, then try PTT again (a process that's"
-echo "already running when permission is granted needs to be restarted to pick"
-echo "it up: launchctl unload ~/Library/LaunchAgents/com.switchboard.bridge.plist"
-echo "then launchctl load the same path, or just re-run this script)."
+# --- summary ---------------------------------------------------------------
+printf '\n%s%sSetup complete%s\n' "$BOLD" "$GREEN" "$RESET"
+cat <<EOF
+
+  The bridge is running now and will start automatically every time you
+  log in — no manual command needed going forward.
+
+  Next steps:
+    1. Plug in the ESP32-S3 + NeoKey board.
+    2. Press an agent key to confirm it launches/selects a session.
+    3. The first time you use push-to-talk, macOS will prompt for
+       Accessibility permission — grant it, then restart the bridge to
+       pick it up:
+         launchctl unload ~/Library/LaunchAgents/com.switchboard.bridge.plist
+         launchctl load ~/Library/LaunchAgents/com.switchboard.bridge.plist
+       (or just re-run this script)
+
+  Logs:   ~/Library/Logs/Switchboard/bridge.{out,err}.log
+  Config: host/agents.json
+EOF
