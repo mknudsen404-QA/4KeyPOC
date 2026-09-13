@@ -17,12 +17,12 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import enum
 import fcntl
 import glob
 import http.server
 import json
 import os
-import re
 import select
 import shlex
 import shutil
@@ -31,6 +31,7 @@ import sys
 import termios
 import threading
 import time
+import traceback
 import tty
 from dataclasses import dataclass
 from pathlib import Path
@@ -139,10 +140,13 @@ class BridgeState:
     no_open: bool = False
     dry_run: bool = False
     device_fd: int | None = None
+    dead_probes: dict[str, int] | None = None
 
     def __post_init__(self) -> None:
         if self.effort_by_slot is None:
             self.effort_by_slot = {}
+        if self.dead_probes is None:
+            self.dead_probes = {}
 
 
 def load_registry(path: Path = DEFAULT_REGISTRY) -> dict:
@@ -222,7 +226,6 @@ def slot_record(
     terminal_title: str,
     effort: str = "medium",
     terminal_tty: str | None = None,
-    terminal_log: str | None = None,
 ) -> dict:
     return {
         "slot": slot,
@@ -232,7 +235,6 @@ def slot_record(
         "command": command,
         "terminal_title": terminal_title,
         "terminal_tty": terminal_tty,
-        "terminal_log": terminal_log,
         "status": "launched",
         "effort": normalize_effort(effort),
         "activity": "terminal launched",
@@ -448,7 +450,7 @@ def agent_update_event(record: dict) -> dict:
 
 
 # Guards os.write(device_fd, ...) below. Without it, concurrent writers to
-# the one shared serial fd — the main listener loop, the poll_slot_logs
+# the one shared serial fd — the main listener loop, the liveness ticker
 # background thread, and each ThreadingHTTPServer hook-request thread (two
 # CLIs can fire lifecycle hooks within milliseconds of each other) — can
 # interleave their bytes mid-write. The firmware reads line-by-line, so an
@@ -482,7 +484,7 @@ def write_slot_update(fd: int | None, registry: dict, slot: int | str) -> None:
 def describe_event(event: dict, state: BridgeState) -> str:
     name = event.get("event")
     # Always read the registry fresh: it's also written by the HTTP hook
-    # server and the log-polling thread, both on their own threads, so a
+    # server and the liveness ticker, both on their own threads, so a
     # cached copy here would go stale the moment either of them fires and
     # get pushed to the device on the next button press, repainting a key
     # with an old status.
@@ -491,37 +493,52 @@ def describe_event(event: dict, state: BridgeState) -> str:
     if name == "agent.select":
         state.selected_slot = int(event.get("slot", 0)) or None
         state.selected_agent = event.get("name")
-        if state.selected_slot:
-            slot_key = str(state.selected_slot)
-            existing = registry.get("slots", {}).get(slot_key)
-            if existing and existing.get("terminal_tty") and not find_terminal_tab(existing["terminal_tty"]):
-                # The Terminal window/tab was closed by hand since launch.
-                # Treat the slot as empty again so re-pressing its key can
-                # relaunch a fresh session instead of describing a ghost.
-                with registry_transaction(state.registry_path) as txn_registry:
-                    txn_registry.get("slots", {}).pop(slot_key, None)
-                registry = load_registry(state.registry_path)
-            if not registry.get("slots", {}).get(slot_key) and state.auto_launch:
-                message = launch_slot_from_config(
-                    slot=state.selected_slot,
-                    config=state.launch_config,
-                    registry_path=state.registry_path,
-                    dry_run=state.dry_run,
-                    no_open=state.no_open,
-                )
-                registry = load_registry(state.registry_path)
-                write_slot_update(state.device_fd, registry, state.selected_slot)
-                return message
-            # Slot already has a live session — re-selecting it should bring
-            # its window to front, not just repaint the LED. (A freshly
-            # launched slot, above, already comes to front on its own via
-            # Terminal's `do script` + activate.)
-            live = registry.get("slots", {}).get(slot_key)
-            if live and live.get("terminal_tty"):
-                focus_terminal_tab(live["terminal_tty"])
+        if not state.selected_slot:
+            return "Selected agent slot is unknown"
+        slot_key = str(state.selected_slot)
+        existing = registry.get("slots", {}).get(slot_key)
+
+        if existing:
+            probe = probe_liveness(existing)
+            if probe is Liveness.DEAD:
+                if _dead_probe_confirmed(state, slot_key):
+                    freed = reconcile_liveness(state, slot_keys=[slot_key])
+                    registry = load_registry(state.registry_path)
+                    existing = registry.get("slots", {}).get(slot_key)
+                    if freed and not existing:
+                        pass  # fall through below to (maybe) auto-launch
+                else:
+                    return f"Slot {state.selected_slot}: liveness unconfirmed, probing again"
+            else:
+                state.dead_probes.pop(slot_key, None)
+                if probe is Liveness.UNKNOWN:
+                    # --no-open records (no terminal_tty) are always UNKNOWN,
+                    # and never auto-launched here: only hooks/clear can free
+                    # them, so re-pressing the key just re-focuses/repaints.
+                    if existing.get("terminal_tty"):
+                        focus_terminal_tab(existing["terminal_tty"])
+                    write_slot_update(state.device_fd, registry, slot_key)
+                    return f"Slot {state.selected_slot}: liveness unknown, not relaunching"
+                # ALIVE — bring its window to front and repaint, don't relaunch.
+                if existing.get("terminal_tty"):
+                    focus_terminal_tab(existing["terminal_tty"])
+                write_slot_update(state.device_fd, registry, slot_key)
+                return f"Selected {registry_slot_summary(registry, slot_key)}"
+
+        if not existing and state.auto_launch:
+            message = launch_slot_from_config(
+                slot=state.selected_slot,
+                config=state.launch_config,
+                registry_path=state.registry_path,
+                dry_run=state.dry_run,
+                no_open=state.no_open,
+            )
+            registry = load_registry(state.registry_path)
             write_slot_update(state.device_fd, registry, state.selected_slot)
-            return f"Selected {registry_slot_summary(registry, state.selected_slot)}"
-        return "Selected agent slot is unknown"
+            return message
+
+        write_slot_update(state.device_fd, registry, slot_key)
+        return f"Selected {registry_slot_summary(registry, slot_key)}"
 
     if name == "agent.update.ack":
         return f"Board applied update for Agent {event.get('slot')}"
@@ -542,13 +559,11 @@ def describe_event(event: dict, state: BridgeState) -> str:
         record = registry.get("slots", {}).get(str(slot))
         pushed = False
         if LIVE_EFFORT_RESTART_ENABLED and record and record.get("terminal_tty"):
-            if find_terminal_tab(record["terminal_tty"]):
+            if probe_liveness(record) is Liveness.ALIVE:
                 new_command = command_with_effort(record["command"], record["family"], effort)
                 cwd = record.get("cwd", str(PROJECT_ROOT))
                 title = record.get("terminal_title", f"Switchboard A{slot}")
-                new_shell_command = terminal_command(
-                    cwd, new_command, title, log_path=record.get("terminal_log"), slot=slot
-                )
+                new_shell_command = terminal_command(cwd, new_command, title, slot=slot)
                 pushed = restart_in_slot_terminal(record["terminal_tty"], new_shell_command)
             else:
                 # Tab was closed by hand since launch; stop treating it as live.
@@ -575,7 +590,7 @@ def describe_event(event: dict, state: BridgeState) -> str:
         if family not in VOICE_SUPPORTED_FAMILIES:
             return f"Voice hold: agent {slot} is '{family}', voice is Claude-only for now"
         tty_name = record.get("terminal_tty")
-        if not tty_name or not find_terminal_tab(tty_name):
+        if not tty_name or probe_liveness(record) is Liveness.DEAD:
             return f"Voice hold start: agent {slot} has no open terminal tab"
 
         # NOTE: we deliberately do NOT auto-type "/voice" here. It's a toggle,
@@ -651,86 +666,113 @@ def run_listener(lines: Iterable[str], registry_path: Path, duration: float | No
     return 0
 
 
-ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*(\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\r")
+class Liveness(enum.Enum):
+    ALIVE = "alive"
+    DEAD = "dead"
+    UNKNOWN = "unknown"
 
 
-def strip_ansi(text: str) -> str:
-    return ANSI_RE.sub("", text)
+_SHELL_COMMS = {"login", "-zsh", "zsh", "-bash", "bash", "sh", "-sh", "fish", "-fish"}
+
+# Indirection so tests can monkeypatch the process-liveness check.
+_run = subprocess.run
 
 
-# PROVISIONAL. These patterns are intentionally few and conservative rather
-# than guessed at length — they have not been calibrated against a real
-# codex/claude session transcript yet. Treat status auto-detection as
-# best-effort until verified live and expand this list from what's actually
-# observed (see Status Auto-Detection Plan in SWITCHBOARD_DESIGN.md).
-#
-# No "error"/"traceback" -> blocked pattern here on purpose: matching those
-# words anywhere in the last few KB of a log fires on any benign mention
-# (grep output, "error handling", a since-fixed traceback scrolling by),
-# and was flipping the LED red constantly during ordinary subagent runs.
-# Real status changes come from actual hook events (CLAUDE_HOOK_STATUS /
-# CODEX_HOOK_STATUS below); "blocked" is unreached until something more
-# precise than a text-scan can set it.
-ACTIVITY_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"\(y/n\)|\[y/n\]", re.IGNORECASE), "needs_input"),
-]
+def probe_liveness(record: dict) -> Liveness:
+    """Is the process behind this slot's terminal still running?
 
-TAIL_READ_BYTES = 4000
-
-
-def classify_activity(tail_text: str) -> str | None:
-    clean = strip_ansi(tail_text)
-    for pattern, status in ACTIVITY_PATTERNS:
-        if pattern.search(clean):
-            return status
-    return None
-
-
-def read_log_tail(log_path: str, max_bytes: int = TAIL_READ_BYTES) -> str:
+    UNKNOWN covers both "we can't tell" (a ps failure/timeout) and
+    "there's nothing to check" (a --no-open record has no terminal_tty at
+    all) — in both cases the bridge can't safely conclude DEAD, so only
+    hooks or an explicit `clear` can free the slot.
+    """
+    tty_path = record.get("terminal_tty")
+    if not tty_path:
+        return Liveness.UNKNOWN
+    if not os.path.exists(tty_path):
+        return Liveness.DEAD  # tab closed: the pty node is gone
     try:
-        with open(log_path, "rb") as handle:
-            handle.seek(0, os.SEEK_END)
-            size = handle.tell()
-            handle.seek(max(0, size - max_bytes))
-            return handle.read().decode("utf-8", errors="ignore")
-    except OSError:
-        return ""
+        result = _run(
+            ["ps", "-o", "comm=", "-t", os.path.basename(tty_path)],
+            capture_output=True, text=True, timeout=2.0, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return Liveness.UNKNOWN
+    if result.returncode not in (0, 1):
+        return Liveness.UNKNOWN
+    comms = {line.strip().rsplit("/", 1)[-1] for line in result.stdout.splitlines() if line.strip()}
+    return Liveness.ALIVE if (comms - _SHELL_COMMS) else Liveness.DEAD
 
 
-def poll_slot_logs(state: BridgeState, stop_event: threading.Event, interval: float = 2.0) -> None:
-    """Background loop: tail each launched slot's log, push a status change
-    to the device when the classifier's guess differs from what's stored.
-    Also proactively frees any slot whose Terminal tab was closed by hand —
-    lifecycle hooks cover `/exit`, but a plain window/tab close (Cmd+W) fires
-    no hook at all, so this is the only thing that ever notices that case.
-    Runs alongside the serial-reading loop in its own thread; every read of
-    state.registry_path goes through load_registry/save_registry so this
-    never holds the file open across a sleep.
+def _dead_probe_confirmed(state: BridgeState, slot_key: str) -> bool:
+    """Record one DEAD probe for slot_key; True once it has 2 in a row."""
+    count = state.dead_probes.get(slot_key, 0) + 1
+    if count >= 2:
+        state.dead_probes.pop(slot_key, None)
+        return True
+    state.dead_probes[slot_key] = count
+    return False
+
+
+def reconcile_liveness(
+    state: BridgeState,
+    *,
+    slot_keys: Iterable[str] | None = None,
+    require_confirmation: bool = True,
+) -> list[str]:
+    """Probe registered slots (all of them, or just slot_keys); free any
+    that are confirmed dead. Returns the freed slot keys.
+
+    With require_confirmation (the default), a slot is only freed on its
+    second consecutive DEAD probe (see _dead_probe_confirmed) — a single
+    DEAD reading right after launch, or a transient ps hiccup, shouldn't
+    free a slot that's actually fine. require_confirmation=False (used at
+    bridge startup, where nothing has been running yet) frees on the first
+    DEAD reading.
+
+    Does not push device updates itself — callers do that (see
+    _liveness_ticker and the agent.select handling in describe_event), so a
+    caller that's about to push a full sync anyway (bridge startup) doesn't
+    end up sending two updates for the same freed slot.
+    """
+    freed: list[str] = []
+    with registry_transaction(state.registry_path) as registry:
+        slots = registry.get("slots", {})
+        keys = list(slot_keys) if slot_keys is not None else list(slots.keys())
+        for slot_key in keys:
+            record = slots.get(slot_key)
+            if not record:
+                state.dead_probes.pop(slot_key, None)
+                continue
+            probe = probe_liveness(record)
+            if probe is not Liveness.DEAD:
+                state.dead_probes.pop(slot_key, None)
+                continue
+            if require_confirmation and not _dead_probe_confirmed(state, slot_key):
+                continue
+            slots.pop(slot_key, None)
+            state.dead_probes.pop(slot_key, None)
+            freed.append(slot_key)
+    return freed
+
+
+def _liveness_ticker(state: BridgeState, stop_event: threading.Event, interval: float) -> None:
+    """Background loop: probe every registered slot's liveness, freeing any
+    confirmed-dead one so its LED goes back to empty. This is the only thing
+    that ever notices a plain Terminal tab/window close (Cmd+W) — lifecycle
+    hooks cover `/exit`, but a hand-closed tab fires no hook at all. Must
+    never die: a raised exception here would otherwise silently stop all
+    liveness tracking for the rest of the bridge's run.
     """
     while not stop_event.wait(interval):
-        changed_slots: list[str] = []
-        freed_slots: list[str] = []
-        with registry_transaction(state.registry_path) as registry:
-            slots = registry.get("slots", {})
-            for slot_key, record in list(slots.items()):
-                tty_name = record.get("terminal_tty")
-                if tty_name and not find_terminal_tab(tty_name):
-                    freed_slots.append(slot_key)
-                    continue
-                log_path = record.get("terminal_log")
-                if not log_path or not Path(log_path).exists():
-                    continue
-                detected = classify_activity(read_log_tail(log_path))
-                if detected and detected != record.get("status"):
-                    record["status"] = detected
-                    record["last_updated_at"] = _now()
-                    changed_slots.append(slot_key)
-            for slot_key in freed_slots:
-                slots.pop(slot_key, None)
-        if changed_slots or freed_slots:
-            registry = load_registry(state.registry_path)
-            for slot_key in changed_slots + freed_slots:
-                write_slot_update(state.device_fd, registry, slot_key)
+        try:
+            freed = reconcile_liveness(state)
+            if freed:
+                registry = load_registry(state.registry_path)
+                for slot_key in freed:
+                    write_slot_update(state.device_fd, registry, slot_key)
+        except Exception:  # noqa: BLE001 - must survive to probe again next tick
+            traceback.print_exc(file=sys.stderr)
 
 
 HOOK_HOST = "127.0.0.1"
@@ -1056,6 +1098,7 @@ def run_bridge_listener(
     dry_run: bool = False,
     no_open: bool = False,
     device_fd: int | None = None,
+    liveness_interval: float = 2.0,
 ) -> int:
     state = BridgeState(
         registry_path=registry_path,
@@ -1065,9 +1108,19 @@ def run_bridge_listener(
         no_open=no_open,
         device_fd=device_fd,
     )
-    stop_poll = threading.Event()
-    poller = threading.Thread(target=poll_slot_logs, args=(state, stop_poll), daemon=True)
-    poller.start()
+    # Startup: relax the 2-probe confirmation rule (nothing has been running
+    # yet, so a single DEAD reading is trustworthy), then push every slot
+    # 1..4's status to the board — registered slots get their real status,
+    # unregistered ones get "empty" — so a bridge restart always leaves the
+    # LEDs in a clean, correct state instead of whatever they last showed.
+    reconcile_liveness(state, require_confirmation=False)
+    registry = load_registry(state.registry_path)
+    for slot in range(1, 5):
+        write_slot_update(state.device_fd, registry, slot)
+
+    stop_ticker = threading.Event()
+    ticker = threading.Thread(target=_liveness_ticker, args=(state, stop_ticker, liveness_interval), daemon=True)
+    ticker.start()
     hook_server = start_hook_server(state)
     started = time.monotonic()
     try:
@@ -1079,21 +1132,12 @@ def run_bridge_listener(
                 return 0
         return 0
     finally:
-        stop_poll.set()
+        stop_ticker.set()
         if hook_server is not None:
             hook_server.shutdown()
 
 
-LOG_DIR = HOST_DIR / "logs"
-
-
-def terminal_log_path(slot: int) -> Path:
-    return LOG_DIR / f"slot-{slot}.log"
-
-
-def terminal_command(
-    cwd: str, command: str, title: str, log_path: str | None = None, slot: int | None = None
-) -> str:
+def terminal_command(cwd: str, command: str, title: str, slot: int | None = None) -> str:
     lines = [
         f"printf '\\033]0;%s\\007' {shlex.quote(title)}",
         f"cd {shlex.quote(cwd)}",
@@ -1103,15 +1147,7 @@ def terminal_command(
         # POST with which slot they came from — same trick OpenMicro uses
         # with OPENMICRO_INSTANCE_ID.
         lines.append(f"export SWITCHBOARD_SLOT={int(slot)}")
-    if log_path:
-        # `script -q` tees the session's raw pty output (ANSI codes and all)
-        # to log_path so the bridge can tail it for status auto-detection,
-        # without changing how the session itself runs or looks in Terminal.
-        # Truncate first so a relaunch/restart doesn't append onto stale text.
-        lines.append(f": > {shlex.quote(log_path)}")
-        lines.append(f"exec script -q {shlex.quote(log_path)} {command}")
-    else:
-        lines.append(f"exec {command}")
+    lines.append(f"exec {command}")
     return "\n".join(lines)
 
 
@@ -1167,32 +1203,6 @@ end run
     )
     tty_name = result.stdout.strip()
     return tty_name or None
-
-
-def find_terminal_tab(tty_name: str) -> bool:
-    """Return True if a Terminal tab with this tty is still open."""
-    script = """
-on run argv
-  set targetTty to item 1 of argv
-  tell application "Terminal"
-    repeat with w in windows
-      repeat with t in tabs of w
-        if tty of t is targetTty then
-          return "found"
-        end if
-      end repeat
-    end repeat
-  end tell
-  return "missing"
-end run
-"""
-    result = subprocess.run(
-        ["osascript", "-e", script, tty_name],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip() == "found"
 
 
 def focus_terminal_tab(tty_name: str) -> bool:
@@ -1325,11 +1335,8 @@ def launch_agent(args: argparse.Namespace) -> int:
     effort = normalize_effort(getattr(args, "effort", None))
     command = command_with_effort(base_command, args.family, effort)
 
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = str(terminal_log_path(slot))
-
     title = args.title or f"Switchboard A{slot} {args.name}"
-    shell_command = terminal_command(cwd, command, title, log_path=log_path, slot=slot)
+    shell_command = terminal_command(cwd, command, title, slot=slot)
     # Store the base command (no effort flags) so a later live effort change
     # can rebuild the launch line from scratch instead of stacking flags.
     record = slot_record(
@@ -1340,7 +1347,6 @@ def launch_agent(args: argparse.Namespace) -> int:
         command=base_command,
         terminal_title=title,
         effort=effort,
-        terminal_log=log_path,
     )
 
     if args.dry_run:
@@ -1426,53 +1432,6 @@ def clear_slot(args: argparse.Namespace) -> int:
         print(f"Cleared Agent {args.slot}")
     else:
         print(f"Agent {args.slot} was already empty")
-    return 0
-
-
-def test_trigger(args: argparse.Namespace) -> int:
-    """Type text into a slot's live terminal tab, for testing status
-    auto-detection without spending any real agent/API usage. Intended for a
-    'shell'-family test slot (e.g. `launch --family shell --command cat`) —
-    cat echoes back whatever it's given, which is what feeds the tee'd log
-    the poller reads. Using this against a real codex/claude slot would type
-    into that agent's actual input, so it's refused unless --force is passed.
-    """
-    registry = load_registry(args.registry)
-    record = registry.get("slots", {}).get(str(args.slot))
-    if not record:
-        print(f"Slot {args.slot} is empty — launch a test agent into it first.", file=sys.stderr)
-        return 2
-    if record.get("family") != "shell" and not args.force:
-        print(
-            f"Slot {args.slot} is family '{record.get('family')}', not a 'shell' test slot. "
-            "This would type into a real agent's input. Pass --force if that's really what you want.",
-            file=sys.stderr,
-        )
-        return 2
-    tty_name = record.get("terminal_tty")
-    if not tty_name or not find_terminal_tab(tty_name):
-        print(f"Slot {args.slot} has no open terminal tab to inject into.", file=sys.stderr)
-        return 2
-
-    script = """
-on run argv
-  set targetTty to item 1 of argv
-  set payload to item 2 of argv
-  tell application "Terminal"
-    repeat with w in windows
-      repeat with t in tabs of w
-        if tty of t is targetTty then
-          do script payload in t
-        end if
-      end repeat
-    end repeat
-  end tell
-end run
-"""
-    subprocess.run(["osascript", "-e", script, tty_name, args.text], check=True)
-    print(f"Injected into slot {args.slot}: {args.text!r}")
-    print("Give the poller a couple seconds (default interval 2s), then check:")
-    print(f"  python3 host/switchboard_bridge.py slots")
     return 0
 
 
@@ -1687,15 +1646,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Register Switchboard lifecycle hooks with Claude Code and Codex (real status auto-detection)",
     )
     hooks_parser.set_defaults(func=install_hooks)
-
-    trigger_parser = subcommands.add_parser(
-        "test-trigger", help="Type text into a shell-family test slot's terminal (no API cost)"
-    )
-    trigger_parser.set_defaults(func=test_trigger)
-    trigger_parser.add_argument("--registry", type=Path, default=argparse.SUPPRESS)
-    trigger_parser.add_argument("--slot", type=int, required=True)
-    trigger_parser.add_argument("text")
-    trigger_parser.add_argument("--force", action="store_true", help="Allow injecting into a non-shell (real agent) slot")
 
     sync_parser = subcommands.add_parser("sync", help="Send registered slot status to the board")
     sync_parser.set_defaults(func=sync_device)

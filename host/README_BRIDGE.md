@@ -368,41 +368,6 @@ payload body to actually be parsed (today `do_POST` drains and discards it)
 and `transcript_path` read for per-turn `usage` data — a real lift, not a
 quick add. Revisit after duration escalation is proven out.
 
-## Testing status auto-detection without spending tokens
-
-The bridge tees every launched session's raw output to `host/logs/slot-N.log`
-(via `script -q`) and a background thread tails it, pattern-matching for
-status changes — see "Status Auto-Detection Plan" in
-`SWITCHBOARD_DESIGN.md`. To test that whole pipeline — log → poll
-thread → registry → serial push → screen — without launching a real codex/claude
-session:
-
-```sh
-# 1. Launch a harmless test agent (cat echoes back whatever it's given —
-#    exactly what the tee/poll pipeline needs, at zero API cost).
-python3 host/switchboard_bridge.py launch --slot 1 --name Test --family shell --command cat
-
-# 2. With `listen` running (auto-launch or not, doesn't matter here), inject
-#    trigger text into that slot's real terminal tab:
-python3 host/switchboard_bridge.py test-trigger --slot 1 "waiting for approval (y/n)"
-python3 host/switchboard_bridge.py test-trigger --slot 1 "Traceback (most recent call last):"
-
-# 3. Check the registry picked it up (give the poller ~2s):
-python3 host/switchboard_bridge.py slots
-
-# 4. Watch the board — Operator 1 should flip status color/word live.
-
-# 5. Clean up when done:
-python3 host/switchboard_bridge.py clear --slot 1
-```
-
-`test-trigger` refuses to run against a non-`shell` slot (`--force` overrides)
-since typing into a real agent's terminal would be typing into its actual
-input, not a safe test. Current detection patterns are intentionally minimal
-and unverified against real codex/claude output (see the design doc) — this
-harness is exactly how to safely find and add better ones without spending
-real usage on the process of finding them.
-
 ## Safety rule
 
 Mutating actions stay inert until the bridge has an explicit implementation and a deliberate confirmation path. The firmware can emit a requested action, but this bridge only reports it.

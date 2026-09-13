@@ -11,7 +11,6 @@ components/
 # Python bridge: venv and cache are per-machine, not source
 host/.venv/
 host/__pycache__/
-host/logs/
 host/tests/__pycache__/
 .pytest_cache/
 
