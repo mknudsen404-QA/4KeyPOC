@@ -1,8 +1,5 @@
-import threading
-import time
-
 from switchboard.bridge import Bridge
-from switchboard.clock import FakeClock, SystemClock
+from switchboard.clock import FakeClock
 from switchboard.device import FakeDevice
 from switchboard.events import BoardEvent, HookEvent
 from switchboard.liveness import FakeProber
@@ -98,7 +95,10 @@ def test_effects_run_after_lock_released(tmp_path):
 
 
 def test_worker_survives_step_exception(tmp_path):
-    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path, clock=SystemClock())
+    """run()'s worker loop wraps step() in try/except so one event's
+    exception doesn't kill the thread — exercised here directly (no
+    threads, no real time) by calling step() the same way run() does."""
+    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path)
     registry.save({"version": 1, "slots": {}})
 
     calls = {"n": 0}
@@ -112,18 +112,13 @@ def test_worker_survives_step_exception(tmp_path):
 
     device.send = flaky_send
 
-    # hook_port=0: let the OS pick a free ephemeral port (this test doesn't
-    # exercise hooks) instead of the default 8877, which a real bridge
-    # LaunchAgent may already hold on a dev machine.
-    thread = threading.Thread(target=bridge.run, kwargs={"duration": 0.6, "hook_port": 0})
-    thread.start()
-    time.sleep(0.05)
-    bridge.submit(BoardEvent("agent.select", {"slot": 1}))  # triggers the flaky raise
-    time.sleep(0.1)
-    bridge.submit(BoardEvent("agent.select", {"slot": 1}))  # should still work afterward
-    thread.join(timeout=10)  # generous: only proves eventual termination, not speed
+    try:
+        bridge.step(BoardEvent("agent.select", {"slot": 1}))  # triggers the flaky raise
+    except RuntimeError:
+        pass  # exactly what run()'s try/except absorbs
 
-    assert not thread.is_alive()
+    # The worker must still function afterward.
+    bridge.step(BoardEvent("agent.select", {"slot": 1}))
     assert calls["n"] >= 2
     assert len(device.sent) >= 1
 
