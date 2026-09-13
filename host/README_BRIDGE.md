@@ -3,8 +3,8 @@
 ## Setting up on a new Mac
 
 ```sh
-git clone https://github.com/mknudsen404-QA/codex-micro-switchboard.git
-cd codex-micro-switchboard/host
+git clone https://github.com/mknudsen404-QA/4KeyPOC.git
+cd 4KeyPOC/host
 ./setup.sh
 ```
 
