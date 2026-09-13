@@ -57,6 +57,7 @@ from switchboard.model import (  # noqa: E402 - needs HOST_DIR on sys.path first
     CODEX_HOOK_STATUS,
     EFFORT_ALIASES,
     STATUS_CHOICES,
+    VOICE_SUPPORTED_FAMILIES,
     Liveness,
     command_with_effort,
     effort_args,
@@ -75,10 +76,8 @@ USER_AGENTS_CONFIG = HOST_DIR / "agents.json"
 EXAMPLE_AGENTS_CONFIG = HOST_DIR / "agents.example.json"
 DEFAULT_AGENTS_CONFIG = USER_AGENTS_CONFIG if USER_AGENTS_CONFIG.exists() else EXAMPLE_AGENTS_CONFIG
 # macOS virtual keycode for the spacebar (used to drive Claude Code's /voice
-# hold-to-record mode). Voice hold is Claude-only for now — Codex's /voice
-# support, if any, hasn't been scoped.
+# hold-to-record mode).
 SPACE_KEYCODE = 49
-VOICE_SUPPORTED_FAMILIES = ("claude",)
 KNOWN_COMMAND_PATHS = {
     "codex": [
         "/Applications/ChatGPT.app/Contents/Resources/codex",

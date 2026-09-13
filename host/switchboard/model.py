@@ -54,6 +54,11 @@ def command_with_effort(base_command: str, family: str, effort: str | None) -> s
     return f"{base_command} {shlex.join(extra_args)}"
 
 
+# Voice hold is Claude-only for now — Codex's /voice support, if any,
+# hasn't been scoped.
+VOICE_SUPPORTED_FAMILIES = ("claude",)
+
+
 class Liveness(enum.Enum):
     ALIVE = "alive"
     DEAD = "dead"
