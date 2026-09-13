@@ -1,0 +1,87 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: #8B7AE8; } a:hover { color: #A594F5; }
+    .cap2 {
+      border-radius: 4px;
+      background: linear-gradient(160deg, #34363c 0%, #1e2024 55%, #151619 100%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), inset 0 -5px 7px rgba(0,0,0,0.4), 0 2px 3px rgba(0,0,0,0.5);
+    }
+  </style>
+</helmet>
+
+<div style="min-height: 100vh; background: radial-gradient(ellipse at 50% 0%, #1a1c20 0%, #08090A 60%); box-sizing: border-box; padding: 70px 56px; font-family: 'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+
+  <div style="font-size: 11px; letter-spacing: 3px; color: #5A6068;">DIRECTION C</div>
+  <div style="font-size: 19px; font-weight: 700; color: #F3F5FA; margin-bottom: 4px;">Windowed Console</div>
+  <div style="font-size: 11px; color: #6B7280; margin-bottom: 44px; max-width: 420px; text-align: center; line-height: 1.6;">Angular printed shell with a cut-out viewport baring the PCB and LED chain beneath — like a windowed PC case. Sharper chamfers, vent slots on the sides, more "gaming rig" than "instrument panel."</div>
+
+  <div style="position: relative; width: 380px; padding: 22px; clip-path: polygon(4% 0%, 96% 0%, 100% 8%, 100% 100%, 0% 100%, 0% 8%); background: linear-gradient(155deg, #2A2D33 0%, #16181B 60%, #0D0E10 100%); box-shadow: 0 30px 60px rgba(0,0,0,0.6);">
+
+    <!-- vent slots -->
+    <div style="position: absolute; top: 30px; bottom: 30px; left: 6px; width: 3px; display: flex; flex-direction: column; justify-content: space-between;">
+      <sc-for list="{{vents}}" as="v" hint-placeholder-count="6"><div style="height: 6px; background: #0A0B0C; border-radius: 1px;"></div></sc-for>
+    </div>
+    <div style="position: absolute; top: 30px; bottom: 30px; right: 6px; width: 3px; display: flex; flex-direction: column; justify-content: space-between;">
+      <sc-for list="{{vents}}" as="v" hint-placeholder-count="6"><div style="height: 6px; background: #0A0B0C; border-radius: 1px;"></div></sc-for>
+    </div>
+
+    <div style="text-align: center; font-size: 8px; letter-spacing: 2px; color: #6B7280; margin-bottom: 16px; margin-top: 6px;">SWITCHBOARD // MK.1</div>
+
+    <!-- viewport window showing PCB beneath -->
+    <div style="background: #060708; border-radius: 3px; padding: 10px; margin-bottom: 16px; box-shadow: inset 0 0 0 1px #26292F, inset 0 3px 10px rgba(0,0,0,0.6);">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 6px; color: #3E7A5C;">PCB REV.C · EXPOSED</span>
+        <div style="display: flex; gap: 3px;">
+          <sc-for list="{{ledDots}}" as="d" hint-placeholder-count="8">
+            <span style="width: 3px; height: 3px; border-radius: 50%; background: {{d.color}}; box-shadow: 0 0 3px 1px {{d.color}};"></span>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <sc-for list="{{rows}}" as="row" hint-placeholder-count="3">
+        <div style="display: flex; gap: 8px;">
+          <sc-for list="{{row.keys}}" as="key" hint-placeholder-count="4">
+            <div style="position: relative; flex: 1; aspect-ratio: 1;">
+              <div style="position: absolute; inset: -4px; border-radius: 8px; background: {{key.glow}}; filter: blur(6px); opacity: 0.75;"></div>
+              <div class="cap2" style="position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
+                <span style="font-size: 7px; color: #9BA1AA; text-align: center; padding: 0 2px;">{{key.label}}</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="margin-top: 16px; height: 3px; border-radius: 1px; background: linear-gradient(90deg, transparent, #FF4D5A 15%, #FFD84D 40%, #57D7FF 65%, transparent); opacity: 0.9;"></div>
+  </div>
+
+</div>
+
+</x-dc>
+<script data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    const rows = [
+      [{label:'A1',glow:'#FF9F2E'},{label:'A2',glow:'#57D7FF'},{label:'APPROVE',glow:'#52E58A'},{label:'REVIEW',glow:'#7C8994'}],
+      [{label:'A3',glow:'#B59AFF'},{label:'A4',glow:'#FFD84D'},{label:'LGTM',glow:'#7C8994'},{label:'MIC',glow:'#FF4D5A'}],
+      [{label:'A5',glow:'#52E58A'},{label:'A6',glow:'#7A8497'},{label:'CUSTOM',glow:'#7C8994'},{label:'BACK',glow:'#4E5862'}],
+    ].map(keys => ({ keys }));
+    const ledDots = ['#FF9F2E','#57D7FF','#B59AFF','#FFD84D','#52E58A','#7A8497','#FF4D5A','#7C8994'].map(color => ({ color }));
+    return { rows, vents: new Array(6).fill(0), ledDots };
+  }
+}
+</script>
+</body>
+</html>

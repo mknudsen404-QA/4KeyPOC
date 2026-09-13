@@ -1,0 +1,124 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: #B59AFF; }
+    a:hover { color: #D2C3FF; }
+  </style>
+</helmet>
+
+<div style="min-height: 100vh; background: #05070A; box-sizing: border-box; padding: 48px; font-family: 'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace; color: #D7E5D9; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+
+  <div style="font-size: 13px; letter-spacing: 3px; color: #7C8994;">SWITCHBOARD — PANEL CONCEPT</div>
+  <div style="font-size: 22px; font-weight: 700; color: #F3F5FA; margin-bottom: 28px;">6 Agent Keys + 6 Command Keys, One Panel</div>
+
+  <div style="display: flex; align-items: flex-start; gap: 56px;">
+
+    <!-- Detached display, cable-mounted separately -->
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 14px; padding-top: 40px;">
+      <div style="width: 200px; height: 150px; background: #0B0E11; border-radius: 6px; box-shadow: inset 0 0 0 2px #26292F, 0 12px 30px rgba(0,0,0,0.5); padding: 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px;">
+        <div style="display: flex; justify-content: space-between; font-size: 9px; color: #7C8994; border-bottom: 1px solid #232830; padding-bottom: 6px;">
+          <span>OPERATOR 1/6</span>
+          <span style="color: #B59AFF;">EFFORT MED</span>
+        </div>
+        <div style="font-size: 20px; font-weight: 700; color: #F3F5FA;">OPERATOR 1</div>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <span style="width: 7px; height: 7px; border-radius: 2px; background: #FF9F2E; display: inline-block;"></span>
+          <span style="font-size: 11px; font-weight: 700; color: #FF9F2E;">WORKING</span>
+        </div>
+        <div style="display: flex; gap: 3px; margin-top: auto;">
+          <span style="width: 5px; height: 5px; border-radius: 1px; background: #FF9F2E; opacity: 0.9;"></span>
+          <span style="width: 5px; height: 5px; border-radius: 1px; background: #FF9F2E; opacity: 0.5;"></span>
+          <span style="width: 5px; height: 5px; border-radius: 1px; background: #FF9F2E; opacity: 0.3;"></span>
+        </div>
+      </div>
+      <svg width="4" height="46" style="opacity: 0.5;"><line x1="2" y1="0" x2="2" y2="46" stroke="#4E5862" stroke-width="2" stroke-dasharray="4 4"/></svg>
+      <div style="font-size: 10px; color: #7C8994; text-align: center; max-width: 190px; line-height: 1.5;">2" ST7789 display, cable-mounted in its own 3D-printed cradle — any angle, independent of the key panel</div>
+    </div>
+
+    <!-- Key panel -->
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div style="background: #12151A; border-radius: 14px; padding: 26px; box-shadow: 0 20px 50px rgba(0,0,0,0.5), inset 0 0 0 1px #232830;">
+
+        <div style="font-size: 10px; letter-spacing: 2px; color: #565C64; margin-bottom: 14px;">AGENT KEYS — STATUS AT A GLANCE</div>
+
+        <!-- Agent row -->
+        <div style="display: flex; gap: 10px; margin-bottom: 8px;">
+          <sc-for list="{{agentKeys}}" as="key" hint-placeholder-count="6">
+            <div style="width: 64px; height: 64px; border-radius: 8px; background: #1B1F26; border: 1px solid #2C323C; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;">
+              <span style="width: 10px; height: 10px; border-radius: 3px; background: {{key.color}}; display: inline-block;"></span>
+              <span style="font-size: 12px; color: #C7D0D8; letter-spacing: 1px;">{{key.label}}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="height: 1px; background: #232830; margin: 16px 0;"></div>
+
+        <div style="font-size: 10px; letter-spacing: 2px; color: #565C64; margin-bottom: 14px;">COMMAND KEYS — DEFAULT CONFIG (CUSTOMIZABLE)</div>
+
+        <!-- Command row -->
+        <div style="display: flex; gap: 10px;">
+          <sc-for list="{{commandKeys}}" as="key" hint-placeholder-count="6">
+            <div style="width: 64px; height: 64px; border-radius: 8px; background: {{key.bg}}; border: 1px solid {{key.border}}; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 4px; box-sizing: border-box;">
+              <span style="font-size: 9px; color: {{key.textColor}}; letter-spacing: 0.5px; text-align: center; line-height: 1.3;">{{key.label}}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- Board grouping annotation -->
+      <div style="display: flex; gap: 10px; padding: 0 26px;">
+        <div style="flex: 1; text-align: center; font-size: 9px; color: #4E5862; border-top: 1px dashed #3A4453; padding-top: 6px;">NEOKEY 1×4 QT — BOARD 1</div>
+        <div style="flex: 1; text-align: center; font-size: 9px; color: #4E5862; border-top: 1px dashed #3A4453; padding-top: 6px;">BOARD 2</div>
+        <div style="flex: 1; text-align: center; font-size: 9px; color: #4E5862; border-top: 1px dashed #3A4453; padding-top: 6px;">BOARD 3</div>
+      </div>
+
+      <div style="display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; font-size: 10px; color: #7C8994;">
+        <span>Board 1</span>
+        <span style="color: #3A4453;">— STEMMA QT →</span>
+        <span>Board 2</span>
+        <span style="color: #3A4453;">— STEMMA QT →</span>
+        <span>Board 3</span>
+        <span style="color: #3A4453;">— STEMMA QT →</span>
+        <span style="color: #B59AFF;">ESP32-S3-DevKitC-1</span>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="margin-top: 36px; font-size: 11px; color: #565C64; text-align: center; max-width: 620px; line-height: 1.6;">
+    Three physically separate NeoKey 1×4 QT boards, chained by STEMMA QT cables back to one I2C bus — mounted together on a single 3D-printed panel so it reads as one 12-key surface. The screen is a separate module entirely, connected by its own cable, free to sit at whatever angle the enclosure calls for.
+  </div>
+
+</div>
+
+</x-dc>
+<script data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    const agentColors = ['#FF9F2E', '#57D7FF', '#B59AFF', '#FFD84D', '#52E58A', '#7A8497'];
+    const agentKeys = agentColors.map((color, i) => ({ label: 'A' + (i + 1), color }));
+
+    const commandKeys = [
+      { label: 'APPROVE / CONTINUE', bg: '#1B1F26', border: '#2C323C', textColor: '#C7D0D8' },
+      { label: 'CODE REVIEW', bg: '#1B1F26', border: '#2C323C', textColor: '#C7D0D8' },
+      { label: 'LGTM', bg: '#1B1F26', border: '#2C323C', textColor: '#C7D0D8' },
+      { label: 'HOLD TO TALK', bg: '#241417', border: '#4A2129', textColor: '#FF9AA6' },
+      { label: 'CUSTOM', bg: '#1B1F26', border: '#2C323C', textColor: '#C7D0D8' },
+      { label: 'BACK', bg: '#1B1F26', border: '#2C323C', textColor: '#7C8994' },
+    ];
+
+    return { agentKeys, commandKeys };
+  }
+}
+</script>
+</body>
+</html>

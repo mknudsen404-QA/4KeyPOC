@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: #8B7AE8; } a:hover { color: #A594F5; }
+    .cap {
+      border-radius: 5px;
+      background: linear-gradient(160deg, #2a2c31 0%, #1a1c1f 60%, #131417 100%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), inset 0 -4px 6px rgba(0,0,0,0.4), 0 2px 4px rgba(0,0,0,0.5);
+    }
+  </style>
+</helmet>
+
+<div style="min-height: 100vh; background: radial-gradient(ellipse at 50% 0%, #1a1c20 0%, #08090A 60%); box-sizing: border-box; padding: 70px 56px; font-family: 'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+
+  <div style="font-size: 11px; letter-spacing: 3px; color: #5A6068;">DIRECTION A</div>
+  <div style="font-size: 19px; font-weight: 700; color: #F3F5FA; margin-bottom: 4px;">Bare PCB Flex</div>
+  <div style="font-size: 11px; color: #6B7280; margin-bottom: 44px; max-width: 420px; text-align: center; line-height: 1.6;">No shell at all — the board IS the product. Matte black soldermask, gold-flash edge castellations, white silkscreen doing the labeling. Standoff legs, nothing hiding what it is.</div>
+
+  <div style="position: relative; width: 380px; padding: 26px 22px; border-radius: 4px; background: linear-gradient(155deg, #0F1C16 0%, #0A1410 100%); box-shadow: 0 30px 60px rgba(0,0,0,0.6), inset 0 0 0 1px #1E2E26;">
+
+    <!-- gold edge castellation dots -->
+    <div style="position: absolute; top: 8px; left: 8px; right: 8px; display: flex; justify-content: space-between;">
+      <sc-for list="{{edgeDots}}" as="d" hint-placeholder-count="10">
+        <span style="width: 4px; height: 4px; border-radius: 50%; background: #C9A24B; display: inline-block; opacity: 0.8;"></span>
+      </sc-for>
+    </div>
+
+    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px; margin-top: 10px;">
+      <span style="font-size: 8px; letter-spacing: 2px; color: #4F7A63;">SWITCHBOARD // REV.A</span>
+      <span style="font-size: 8px; color: #C9A24B;">XL9555 · WS2812</span>
+    </div>
+
+    <!-- exposed IC + LED strip callouts -->
+    <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+      <div style="width: 28px; height: 18px; background: #14171B; border-radius: 2px; box-shadow: inset 0 0 0 1px #2A2D33; display: flex; align-items: center; justify-content: center;">
+        <span style="font-size: 5px; color: #565C64;">U1</span>
+      </div>
+      <div style="flex: 1; height: 3px; align-self: center; border-radius: 2px; background: linear-gradient(90deg, #FF9F2E, #B59AFF, #57D7FF); box-shadow: 0 0 8px 1px rgba(87,215,255,0.4);"></div>
+    </div>
+
+    <!-- key grid, keys sitting directly on exposed board -->
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <sc-for list="{{rows}}" as="row" hint-placeholder-count="3">
+        <div style="display: flex; gap: 8px;">
+          <sc-for list="{{row.keys}}" as="key" hint-placeholder-count="4">
+            <div style="position: relative; flex: 1; aspect-ratio: 1;">
+              <div style="position: absolute; inset: -4px; border-radius: 8px; background: {{key.glow}}; filter: blur(6px); opacity: 0.7;"></div>
+              <div class="cap" style="position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
+                <span style="font-size: 7px; color: #9BA1AA; text-align: center; padding: 0 2px;">{{key.label}}</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="margin-top: 16px; font-size: 6.5px; color: #3E4A44; text-align: right;">MADE FOR HUMANS + AGENTS</div>
+  </div>
+
+</div>
+
+</x-dc>
+<script data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    const rows = [
+      [{label:'A1',glow:'#FF9F2E'},{label:'A2',glow:'#57D7FF'},{label:'APPROVE',glow:'#52E58A'},{label:'REVIEW',glow:'#7C8994'}],
+      [{label:'A3',glow:'#B59AFF'},{label:'A4',glow:'#FFD84D'},{label:'LGTM',glow:'#7C8994'},{label:'MIC',glow:'#FF4D5A'}],
+      [{label:'A5',glow:'#52E58A'},{label:'A6',glow:'#7A8497'},{label:'CUSTOM',glow:'#7C8994'},{label:'BACK',glow:'#4E5862'}],
+    ].map(keys => ({ keys }));
+    return { rows, edgeDots: new Array(10).fill(0) };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,136 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: #8B7AE8; } a:hover { color: #A594F5; }
+    .keycap-hero {
+      border-radius: 6px;
+      background: linear-gradient(160deg, #34363c 0%, #1e2024 55%, #151619 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.10),
+        inset 0 -5px 7px rgba(0,0,0,0.4),
+        0 2px 3px rgba(0,0,0,0.5);
+    }
+  </style>
+</helmet>
+
+<div style="min-height: 100vh; background: radial-gradient(ellipse at 50% 20%, #23262c 0%, #0A0B0D 65%); box-sizing: border-box; padding: 90px 56px; font-family: 'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace; display: flex; flex-direction: column; align-items: center; gap: 10px;">
+
+  <div style="font-size: 12px; letter-spacing: 3px; color: #6B7280; margin-bottom: 4px;">SWITCHBOARD — FUTURISTIC CONCEPT</div>
+  <div style="font-size: 20px; font-weight: 700; color: #F3F5FA; margin-bottom: 56px;">Tilted deck, screen up top, one printed body</div>
+
+  <div style="perspective: 1500px;">
+    <div style="
+      transform: rotateX(40deg) rotateZ(0deg);
+      transform-origin: center bottom;
+      width: 340px;
+      border-radius: 22px;
+      background: linear-gradient(155deg, #2C2F35 0%, #1A1C20 45%, #0F1013 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.08),
+        inset 0 0 0 1px rgba(255,255,255,0.04),
+        0 60px 90px rgba(0,0,0,0.65);
+      padding: 22px 22px 26px;
+      box-sizing: border-box;
+    ">
+
+      <!-- Screen bezel + rotary effort dial -->
+      <div style="display: flex; gap: 12px; margin-bottom: 18px;">
+        <div style="flex: 1; background: #060708; border-radius: 12px; padding: 14px; box-shadow: inset 0 0 0 1px #2A2D33, inset 0 2px 8px rgba(0,0,0,0.6);">
+          <div style="background: #0B0E11; border-radius: 5px; padding: 12px 14px; box-shadow: inset 0 0 0 1px #1C2024;">
+            <div style="display: flex; justify-content: space-between; font-size: 8px; color: #6B7280; margin-bottom: 8px;">
+              <span>OPERATOR 3/6</span>
+              <span style="color: #9B8CE8;">EFFORT HIGH</span>
+            </div>
+            <div style="font-size: 15px; font-weight: 700; color: #F3F5FA; margin-bottom: 6px;">OPERATOR 3</div>
+            <div style="display: flex; align-items: center; gap: 5px;">
+              <span style="width: 6px; height: 6px; border-radius: 2px; background: #FFD84D; display: inline-block;"></span>
+              <span style="font-size: 9px; font-weight: 700; color: #FFD84D;">NEEDS_INPUT</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Rotary encoder: turn to preview effort, press to apply -->
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; width: 64px;">
+          <div style="position: relative; width: 52px; height: 52px;">
+            <div style="position: absolute; inset: -6px; border-radius: 50%; background: #9B8CE8; filter: blur(8px); opacity: 0.55;"></div>
+            <div style="position: relative; width: 52px; height: 52px; border-radius: 50%; background: linear-gradient(160deg, #3A3D44 0%, #202226 60%, #131417 100%); box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -4px 6px rgba(0,0,0,0.5), 0 3px 6px rgba(0,0,0,0.5);">
+              <div style="position: absolute; top: 6px; left: 50%; width: 3px; height: 12px; background: #9B8CE8; border-radius: 2px; transform: translateX(-50%) rotate(35deg); transform-origin: 50% 20px; box-shadow: 0 0 6px 1px rgba(155,140,232,0.8);"></div>
+            </div>
+          </div>
+          <span style="font-size: 6.5px; letter-spacing: 0.5px; color: #6B7280; text-align: center;">EFFORT DIAL</span>
+        </div>
+      </div>
+
+      <!-- Glowing seam -->
+      <div style="height: 2px; border-radius: 2px; background: linear-gradient(90deg, transparent, #7B6EE0 30%, #4FD1E8 70%, transparent); box-shadow: 0 0 12px 1px rgba(123,110,224,0.6); margin-bottom: 18px; opacity: 0.85;"></div>
+
+      <!-- Key grid -->
+      <div style="display: flex; flex-direction: column; gap: 9px;">
+        <sc-for list="{{rows}}" as="row" hint-placeholder-count="3">
+          <div style="display: flex; gap: 9px;">
+            <sc-for list="{{row.keys}}" as="key" hint-placeholder-count="4">
+              <div style="position: relative; flex: 1; aspect-ratio: 1;">
+                <div style="position: absolute; inset: -4px; border-radius: 10px; background: {{key.glow}}; filter: blur(7px); opacity: 0.7;"></div>
+                <div class="keycap-hero" style="position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
+                  <span style="font-size: 7.5px; color: #9BA1AA; letter-spacing: 0.4px; text-align: center; line-height: 1.2; padding: 0 2px;">{{key.label}}</span>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- Front light strip -->
+      <div style="margin-top: 18px; height: 4px; border-radius: 2px; background: linear-gradient(90deg, #FF9F2E, #7B6EE0, #4FD1E8); opacity: 0.9; box-shadow: 0 0 16px 2px rgba(79,209,232,0.35);"></div>
+    </div>
+
+    <!-- ground shadow -->
+    <div style="width: 300px; height: 30px; margin: -10px auto 0; background: radial-gradient(ellipse, rgba(0,0,0,0.55) 0%, transparent 70%); transform: rotateX(75deg);"></div>
+  </div>
+
+  <div style="margin-top: 40px; font-size: 11px; color: #6B7280; text-align: center; max-width: 460px; line-height: 1.7;">
+    One printed shell: screen bezel at the top with the effort dial beside it (rotate to preview, press to apply), 4×3 key deck tilted toward you like a numpad, a glowing seam marking the hinge between them, and a light strip along the front edge echoing whichever agent is focused. Matte dark plastic reads more "instrument panel" than "toy" once it's off-white.
+  </div>
+
+</div>
+
+</x-dc>
+<script data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    const rows = [
+      [
+        { label: 'A1', glow: '#FF9F2E' },
+        { label: 'A2', glow: '#57D7FF' },
+        { label: 'APPROVE', glow: '#52E58A' },
+        { label: 'REVIEW', glow: '#7C8994' },
+      ],
+      [
+        { label: 'A3', glow: '#B59AFF' },
+        { label: 'A4', glow: '#FFD84D' },
+        { label: 'LGTM', glow: '#7C8994' },
+        { label: 'HOLD MIC', glow: '#FF4D5A' },
+      ],
+      [
+        { label: 'A5', glow: '#52E58A' },
+        { label: 'A6', glow: '#7A8497' },
+        { label: 'CUSTOM', glow: '#7C8994' },
+        { label: 'BACK', glow: '#4E5862' },
+      ],
+    ].map((keys) => ({ keys }));
+
+    return { rows };
+  }
+}
+</script>
+</body>
+</html>

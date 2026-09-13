@@ -1,0 +1,7 @@
+{"event":"agent.select","slot":1}
+{"event":"agent.reasoning.apply","slot":1,"effort":"HIGH"}
+{"event":"agent.select","slot":2}
+{"event":"voice.hold.start","slot":2}
+{"event":"voice.hold.stop","slot":2}
+{"event":"review.request","slot":2}
+{"event":"slash.run","slot":2,"command":"/review"}

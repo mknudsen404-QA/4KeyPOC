@@ -1,0 +1,17 @@
+{
+  "artboards": [
+    { "file": "Hero.dc.html", "x": 0, "y": 0, "w": 900, "h": 760, "page": "page-1" },
+    { "file": "Main.dc.html", "x": 980, "y": 0, "w": 1000, "h": 620, "page": "page-1" },
+    { "file": "Scale.dc.html", "x": 2060, "y": 0, "w": 900, "h": 700, "page": "page-1" },
+    { "file": "PcbBare.dc.html", "x": 0, "y": 0, "w": 720, "h": 760, "page": "page-2" },
+    { "file": "PcbAcrylic.dc.html", "x": 800, "y": 0, "w": 720, "h": 760, "page": "page-2" },
+    { "file": "PcbConsole.dc.html", "x": 1600, "y": 0, "w": 720, "h": 760, "page": "page-2" },
+    { "file": "StarshipConsole.dc.html", "x": 0, "y": 0, "w": 900, "h": 780, "page": "page-3" }
+  ],
+  "pages": [
+    { "id": "page-1", "name": "Enclosure Concept" },
+    { "id": "page-2", "name": "Custom PCB Directions" },
+    { "id": "page-3", "name": "Starship Console" }
+  ],
+  "launch": { "view": "canvas", "page": "page-3" }
+}
