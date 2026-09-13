@@ -24,6 +24,16 @@ slot is currently selected.
 - `Adafruit_seesaw_Library` (provides `Adafruit_NeoKey_1x4`)
 - `ArduinoJson` (v7)
 
+## Testing the LED logic without a board
+
+The pure LED rendering logic (status colors, the busy-turn ramp, pulse
+timing) lives in `led_model.h`, which has no Arduino includes and can be
+built and run with a plain host C++ compiler:
+
+```sh
+firmware/neokey/test/run.sh
+```
+
 ## A real hardware quirk this code works around
 
 `Adafruit_NeoKey_1x4::begin()` (and the `seesaw_NeoPixel::begin()` it calls
