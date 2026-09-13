@@ -22,21 +22,33 @@ from switchboard.registry import Registry
 from switchboard.device import FdDevice
 from switchboard.terminal import FakeTerminal
 
-# Three of this file's tests fail deterministically on GitHub Actions'
-# macOS runner (never locally: 104/104 green here, repeatedly) despite
-# several genuine fixes along the way (a real hardcoded-"claude"-binary
-# bug, a bounded hook-server shutdown, a de-threaded rewrite of a
-# different flaky test, a settle delay). The root cause on CI specifically
-# is still unknown — diagnostic logging added to Bridge.run() didn't fire
-# on the failing runs, ruling out a silent reader-thread crash. Skip these
-# three on CI only, so the other three integration tests (which pass
-# reliably there), the golden traces, and every unit test still gate CI.
-# Revisit: rerun locally first (they should pass), then try reproducing
-# with GitHub's own runner image locally before spending more CI cycles.
-_SKIP_ON_CI = pytest.mark.skipif(
-    os.environ.get("CI") == "true",
-    reason="flaky on GitHub Actions' pty/thread scheduling — passes reliably locally, root cause not yet found",
-)
+
+@pytest.fixture(scope="session", autouse=True)
+def _warm_up_pty_thread_socket():
+    """Absorb a one-time startup cost before any real test's timing budget
+    does. Observed only on GitHub Actions' macOS runner (never locally):
+    whichever tests happen to be the first few in the session to use
+    `bridge_harness` (pty + background thread + a bound socket) fail with
+    zero device output even though the exact same operations, on the same
+    fixture, succeed reliably for every later test in the same run —
+    confirmed by moving which tests run first and watching the failures
+    move with them. Root cause on CI specifically (likely a first-use cost
+    somewhere in pty/thread/socket setup under that sandbox) isn't
+    pinned down; paying it once, up front, on a throwaway pty/thread/
+    socket before any assertion's clock starts is what actually fixed it.
+    """
+    master, slave = os.openpty()
+    tty.setraw(slave)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.close()
+    warmup_thread = threading.Thread(target=lambda: None)
+    warmup_thread.start()
+    warmup_thread.join()
+    time.sleep(1.0)
+    os.close(master)
+    os.close(slave)
+    yield
 
 
 def free_port() -> int:
@@ -182,7 +194,6 @@ def bridge_harness(tmp_path, fake_clock):
             pass
 
 
-@_SKIP_ON_CI
 def test_golden_launch_turn_stop(bridge_harness):
     master = bridge_harness["master"]
     port = bridge_harness["port"]
@@ -218,7 +229,6 @@ def test_golden_launch_turn_stop(bridge_harness):
     assert empty["status"] == "empty"
 
 
-@_SKIP_ON_CI
 def test_no_duplicate_launch_when_liveness_unknown(bridge_harness):
     master = bridge_harness["master"]
     terminal = bridge_harness["terminal"]
@@ -234,7 +244,6 @@ def test_no_duplicate_launch_when_liveness_unknown(bridge_harness):
     assert len(terminal.opened) == 1
 
 
-@_SKIP_ON_CI
 def test_dead_session_freed_after_two_ticks_and_led_cleared(bridge_harness):
     master = bridge_harness["master"]
     registry = bridge_harness["registry"]
