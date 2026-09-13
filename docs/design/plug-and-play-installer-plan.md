@@ -149,32 +149,66 @@ re-flashing every board with a new stub.
   `USB.begin()`. Wrote a standalone spike sketch,
   `firmware/msc_cdc_spike/msc_cdc_spike.ino` — deliberately separate from
   `codex_micro_neokey.ino`, no NeoKey/seesaw code, safe to flash to a
-  spare board — and compile-verified it (no upload) against this exact
-  core with `arduino-cli compile --fqbn
-  esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB`:
-  builds clean, 353,446 bytes (11%) of app partition. Not yet flashed to
-  physical hardware — that needs a second board (see below) before this
-  spike can be called fully validated end-to-end.
+  spare board.
 - **New sub-finding, not in the original open-questions list:** a bare
   minimal FAT12 image only supports classic 8.3 short filenames (3-char
-  extension max), which can't hold `.command` (7 chars). The real
-  installer volume will need **VFAT long-filename (LFN) directory
-  entries** (extra 0x0F-attribute directory records ahead of the normal
-  8.3 entry) to expose a file actually named e.g.
-  `Install Switchboard.command`. This is a well-documented, mechanical
-  extension to the FAT12 image-building code already spiked — not a
-  blocker, just scoped into the next step (building the real installer
-  stub) rather than this composite-USB spike.
+  extension max), which can't hold `.command` (7 chars). Solved it: added
+  a Python generator, `firmware/msc_cdc_spike/gen_fat.py`, that builds a
+  FAT12 image with proper **VFAT long-filename (LFN) directory entries**
+  (checksum, UTF-16LE name chunks, sequence numbers per the VFAT spec)
+  ahead of the 8.3 fallback entry, baking in the real
+  `Install Switchboard.command` installer script as the volume's one
+  file. The generated image is embedded into the sketch as
+  `installer_disk.h` (a compiled-in byte array, not a flash partition).
 - **MSC re-advertise-forever vs. stop-after-handshake: deferred, not
   resolved.** Punting this to the simplest option (always advertise MSC)
   for a first version, as the plan already allowed — no new information
   changes that call.
-- **Not yet done:** flashing `msc_cdc_spike.ino` to real hardware and
-  confirming a Mac actually mounts the volume and Finder shows the file
-  correctly. This requires a second ESP32-S3 board (or explicit sign-off
-  to briefly reflash the working NeoKey board, with a plan to reflash
-  `codex_micro_neokey.ino` back immediately after) — not done yet pending
-  that decision.
+- **Validated end-to-end on the real working NeoKey board** (with
+  explicit sign-off to reflash it temporarily, then reflash
+  `codex_micro_neokey.ino` back after): flashed `msc_cdc_spike.ino` with
+  the real installer content embedded, and confirmed all of the
+  following on actual macOS hardware, not just in a compile step:
+  - The board enumerates as composite CDC+MSC; a `SWITCHBD` volume
+    mounts automatically in Finder.
+  - The volume contains `Install Switchboard.command` with the correct
+    long filename and byte-identical content to the source file (also
+    cross-checked locally by mounting the generated FAT image directly
+    via `hdiutil`/`diskutil` before ever touching hardware).
+  - CDC keeps working normally the whole time — confirmed by reading the
+    sketch's periodic serial ping directly off the port while the MSC
+    volume was mounted.
+  - Launching the real `.command` file off the mounted volume (Finder
+    double-click equivalent) correctly detected the bridge was already
+    installed on this Mac and showed the "already installed" native
+    dialog, with no repo clone and no changes made — the safe branch to
+    test live without disturbing the real install.
+  - After testing, `codex_micro_neokey.ino` was recompiled and reflashed
+    back onto the board (compile-verified first), and the
+    `com.switchboard.bridge` LaunchAgent reconnected and resumed normal
+    protocol traffic (agent launches, slot selection) with no errors —
+    confirmed via its log. The board is back to its original working
+    state.
+  - Firmware upload required manually entering bootloader mode (hold
+    BOOT, tap RESET, release BOOT) both times — the native-USB auto-reset
+    via RTS didn't reliably drop the board into bootloader mode on this
+    board/cable. Worth knowing for future firmware iteration, not a
+    blocker.
+  - **Real-world caution, not a firmware bug:** after reflashing
+    `codex_micro_neokey.ino` back, the keys briefly stopped responding
+    entirely — the ESP32 was stuck silently in `setup()`'s
+    `while (!ok) { ...seesaw begin()...; delay(1000); }` retry loop,
+    which never logs anything and never reaches `loop()` if the seesaw
+    chip doesn't answer on I2C. This is the exact chip-level fragility
+    firmware/neokey/README.md already documents, apparently triggered by
+    the repeated ESP32 resets and manual BOOT-button handling during this
+    spike's flash cycles. A full USB unplug/replug (which power-cycles
+    the NeoKey chip itself, unlike a RESET-button tap which only resets
+    the ESP32) cleared it — startup LED sweep ran and keys worked again
+    immediately after. **Takeaway for later firmware work on this
+    board:** expect this chip to occasionally need a full power cycle
+    after heavy flash/reset cycling, and don't mistake it for a firmware
+    regression before checking for the startup LED sweep.
 
 ## Relationship to the bigger picture
 
