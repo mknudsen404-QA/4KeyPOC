@@ -18,31 +18,18 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
-import glob
 import http.server
 import json
 import os
 import select
-import shlex
-import shutil
 import subprocess
 import sys
-import termios
 import threading
 import time
 import traceback
-import tty
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, TextIO
-
-try:
-    import Quartz  # type: ignore[import]
-
-    QUARTZ_AVAILABLE = True
-except ImportError:
-    QUARTZ_AVAILABLE = False
-
 
 HOST_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = HOST_DIR.parent
@@ -50,12 +37,9 @@ sys.path.insert(0, str(HOST_DIR))  # so `import switchboard` works regardless of
 
 from switchboard.model import (  # noqa: E402 - needs HOST_DIR on sys.path first
     BUSY_STATUSES,
-    CLAUDE_EFFORT_VALUES,
     CLAUDE_HOOK_STATUS,
-    CODEX_EFFORT_MAP,
     CODEX_HOOK_EVENTS,
     CODEX_HOOK_STATUS,
-    EFFORT_ALIASES,
     STATUS_CHOICES,
     VOICE_SUPPORTED_FAMILIES,
     Liveness,
@@ -67,6 +51,29 @@ from switchboard.model import (  # noqa: E402 - needs HOST_DIR on sys.path first
 from switchboard.model import agent_update_event as _model_agent_update_event
 from switchboard.model import set_status as _model_set_status
 from switchboard.model import slot_record as _model_slot_record
+from switchboard.registry import Registry
+from switchboard.device import find_default_port, SerialDevice
+from switchboard.liveness import ProcessProber
+from switchboard.terminal import AppleScriptTerminal
+from switchboard.launcher import (
+    DEFAULT_CWD,
+    KNOWN_COMMAND_PATHS,
+    agent_config_for_slot,
+    load_agents_config,
+    resolve_agent_cwd,
+    resolve_command,
+    terminal_command,
+    validate_or_create_cwd as _validate_or_create_cwd,
+)
+from switchboard.hooks_server import HOOK_HOST, HOOK_PATH_PREFIX, HOOK_PORT
+from switchboard.hooks_install import (
+    CLAUDE_HOOK_EVENTS,
+    HOOK_MARKER,
+    install_claude_hooks,
+    install_codex_hooks,
+    _claude_group_is_ours,
+)
+
 DEFAULT_REGISTRY = HOST_DIR / "agent_registry.json"
 # agents.json is the user's own per-slot config (which CLI family/command each
 # agent key launches). It is personal/local, not checked in. agents.example.json
@@ -78,42 +85,12 @@ DEFAULT_AGENTS_CONFIG = USER_AGENTS_CONFIG if USER_AGENTS_CONFIG.exists() else E
 # macOS virtual keycode for the spacebar (used to drive Claude Code's /voice
 # hold-to-record mode).
 SPACE_KEYCODE = 49
-KNOWN_COMMAND_PATHS = {
-    "codex": [
-        "/Applications/ChatGPT.app/Contents/Resources/codex",
-    ],
-    "claude": [
-        str(Path.home() / ".local/bin/claude"),
-        "/opt/homebrew/bin/claude",
-        "/usr/local/bin/claude",
-    ],
-}
 
-# Disabled: a live session was observed with only some Ctrl-C interrupts
-# actually landing (real AI TUIs appear to swallow Ctrl-C while a turn is
-# actively generating, only honoring it at idle) — a failed interrupt still
-# types the relaunch shell command into the tab, which becomes a literal
-# message inside the live conversation. Re-enable only after a reliable
-# "did the interrupt actually land" check is added (e.g. reading the tab
-# back via a proper terminal emulator instead of guessing after a fixed
-# delay). Until then, effort changes only update the registry/screen.
-LIVE_EFFORT_RESTART_ENABLED = False
-
-BAUD_RATES = {
-    9600: termios.B9600,
-    19200: termios.B19200,
-    38400: termios.B38400,
-    57600: termios.B57600,
-    115200: termios.B115200,
-}
-
-for _rate_name, _rate_value in (
-    (230400, "B230400"),
-    (460800, "B460800"),
-    (921600, "B921600"),
-):
-    if hasattr(termios, _rate_value):
-        BAUD_RATES[_rate_name] = getattr(termios, _rate_value)
+# A live session was observed with only some Ctrl-C interrupts actually
+# landing (real AI TUIs appear to swallow Ctrl-C while a turn is actively
+# generating) — a failed interrupt typed the relaunch command straight into
+# the live conversation. So effort changes only update the registry/screen;
+# they take effect on the slot's next launch, not the running session.
 
 
 class _SystemClock:
@@ -150,26 +127,11 @@ class BridgeState:
 
 
 def load_registry(path: Path = DEFAULT_REGISTRY) -> dict:
-    if not path.exists():
-        return {"version": 1, "slots": {}}
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    if not isinstance(data, dict):
-        raise ValueError(f"Registry is not an object: {path}")
-    data.setdefault("version", 1)
-    data.setdefault("slots", {})
-    return data
+    return Registry(path).load()
 
 
 def save_registry(registry: dict, path: Path = DEFAULT_REGISTRY) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f".{os.getpid()}.{threading.get_ident()}.tmp")
-    with tmp.open("w", encoding="utf-8") as handle:
-        json.dump(registry, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, path)
+    Registry(path).save(registry)
 
 
 _REGISTRY_LOCK = threading.RLock()
@@ -178,8 +140,12 @@ _REGISTRY_LOCK = threading.RLock()
 @contextlib.contextmanager
 def registry_transaction(path: Path = DEFAULT_REGISTRY):
     """Exclusive load->mutate->save. Holds the in-process lock and an
-    fcntl.flock on <path>.lock so the `status`/`clear`/`config` CLI (separate
-    processes) can't interleave with the running bridge.
+    fcntl.flock on <path>.lock so the `status`/`clear`/`launch` CLI
+    (separate processes) can't interleave with the running bridge.
+
+    Goes through the module-level load_registry/save_registry (not
+    Registry.transaction() directly) so tests that monkeypatch those two
+    names here keep intercepting it.
     """
     lock_path = path.with_name(path.name + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -192,28 +158,6 @@ def registry_transaction(path: Path = DEFAULT_REGISTRY):
         finally:
             fcntl.flock(lock_file, fcntl.LOCK_UN)
 
-
-def normalize_effort(effort: str | None) -> str:
-    value = (effort or "medium").strip().lower()
-    return EFFORT_ALIASES.get(value, value)
-
-
-def effort_args(family: str, effort: str | None) -> list[str]:
-    normalized = normalize_effort(effort)
-    if family == "claude":
-        value = normalized if normalized in CLAUDE_EFFORT_VALUES else "medium"
-        return ["--effort", value]
-    if family == "codex":
-        value = CODEX_EFFORT_MAP.get(normalized, "medium")
-        return ["-c", f"model_reasoning_effort={value}"]
-    return []
-
-
-def command_with_effort(base_command: str, family: str, effort: str | None) -> str:
-    extra_args = effort_args(family, effort)
-    if not extra_args:
-        return base_command
-    return f"{base_command} {shlex.join(extra_args)}"
 
 
 def slot_record(
@@ -242,39 +186,6 @@ def slot_record(
 
 def set_registry_slot(registry: dict, record: dict) -> None:
     registry.setdefault("slots", {})[str(record["slot"])] = record
-
-
-def load_agents_config(path: Path = DEFAULT_AGENTS_CONFIG) -> dict:
-    if not path.exists():
-        return {"agents": []}
-    with path.expanduser().open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    if not isinstance(data, dict):
-        raise ValueError(f"Agent config is not an object: {path}")
-    data.setdefault("agents", [])
-    return data
-
-
-DEFAULT_CWD = "~/Documents"
-
-
-def agent_config_for_slot(config: dict | None, slot: int) -> dict:
-    agents = (config or {}).get("agents", [])
-    for agent in agents:
-        if int(agent.get("slot", 0)) == slot:
-            return dict(agent)
-    return {
-        "slot": slot,
-        "name": f"Agent {slot}",
-        "family": "codex",
-        "command": "codex",
-    }
-
-
-def resolve_agent_cwd(agent: dict, config: dict | None) -> str:
-    """Resolution order: slot cwd -> defaults.cwd -> ~/Documents."""
-    cwd = agent.get("cwd") or (config or {}).get("defaults", {}).get("cwd") or DEFAULT_CWD
-    return str(Path(cwd).expanduser().resolve())
 
 
 def launch_slot_from_config(
@@ -306,56 +217,12 @@ def launch_slot_from_config(
     return f"Agent {slot} was empty, bridge {mode} it"
 
 
-def find_default_port() -> str | None:
-    candidates: list[str] = []
-    for pattern in (
-        "/dev/cu.usbmodem*",
-        "/dev/cu.usbserial*",
-        "/dev/cu.SLAB_USBtoUART*",
-    ):
-        candidates.extend(glob.glob(pattern))
-    return sorted(candidates)[0] if candidates else None
-
-
-def configure_serial(fd: int, baud: int) -> None:
-    if baud not in BAUD_RATES:
-        supported = ", ".join(str(rate) for rate in sorted(BAUD_RATES))
-        raise ValueError(f"Unsupported baud rate {baud}. Supported: {supported}")
-
-    attrs = termios.tcgetattr(fd)
-    attrs[0] = 0
-    attrs[1] = 0
-    attrs[2] = termios.CLOCAL | termios.CREAD | termios.CS8
-    attrs[3] = 0
-    attrs[4] = BAUD_RATES[baud]
-    attrs[5] = BAUD_RATES[baud]
-    attrs[6][termios.VMIN] = 0
-    attrs[6][termios.VTIME] = 1
-    termios.tcsetattr(fd, termios.TCSANOW, attrs)
-    tty.setraw(fd)
-
-
 def open_serial(port: str, baud: int) -> int:
-    fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-    try:
-        # Exclusive access: without this, a second process (a stray `cat`,
-        # another bridge instance, a leftover diagnostic session) can open
-        # the same tty at the same time with no error from either side —
-        # the OS just splits incoming bytes unpredictably between readers.
-        # That happened for real: a diagnostic `cat` outlived its intended
-        # lifetime and silently starved the bridge of every board event for
-        # a good chunk of a debugging session before anyone noticed. Fail
-        # loudly instead.
-        fcntl.ioctl(fd, termios.TIOCEXCL)
-    except OSError as exc:
-        os.close(fd)
-        raise RuntimeError(
-            f"{port} is already open by another process (found while claiming exclusive "
-            f"access). Close whatever else has it — `lsof {port}` will show you what — "
-            "before starting the bridge."
-        ) from exc
-    configure_serial(fd, baud)
-    return fd
+    """Thin wrapper: the real implementation is device.SerialDevice; this
+    keeps returning a bare fd for the not-yet-migrated listen()/sync_device
+    below (Phase 1.4/1.5 replace those with a Bridge/DeviceLink directly).
+    """
+    return SerialDevice(port, baud).fd
 
 
 def serial_lines(fd: int, duration: float | None = None) -> Iterable[str]:
@@ -539,28 +406,10 @@ def describe_event(event: dict, state: BridgeState) -> str:
         if not slot:
             return f"Reasoning effort for agent {slot}: {effort}"
 
-        record = registry.get("slots", {}).get(str(slot))
-        pushed = False
-        if LIVE_EFFORT_RESTART_ENABLED and record and record.get("terminal_tty"):
-            if probe_liveness(record) is Liveness.ALIVE:
-                new_command = command_with_effort(record["command"], record["family"], effort)
-                cwd = record.get("cwd", str(PROJECT_ROOT))
-                title = record.get("terminal_title", f"Switchboard A{slot}")
-                new_shell_command = terminal_command(cwd, new_command, title, slot=slot)
-                pushed = restart_in_slot_terminal(record["terminal_tty"], new_shell_command)
-            else:
-                # Tab was closed by hand since launch; stop treating it as live.
-                update_registry_slot_status(state.registry_path, slot, activity="terminal window closed")
-
-        # Effort is its own field on the device (top-right of the screen);
-        # it doesn't need to also occupy the activity line.
         update_registry_slot_status(state.registry_path, slot, effort=effort)
-        state.effort_by_slot[slot] = effort
         registry = load_registry(state.registry_path)
         write_slot_update(state.device_fd, registry, slot)
-        if pushed:
-            return f"Reasoning effort for agent {slot}: {effort} (restarted live session)"
-        return f"Reasoning effort for agent {slot}: {effort} (no live terminal to update)"
+        return f"Reasoning effort for agent {slot}: {effort} (applies on next launch)"
 
     if name == "voice.hold.start":
         slot = int(event.get("slot", state.selected_slot or 0))
@@ -649,36 +498,17 @@ def run_listener(lines: Iterable[str], registry_path: Path, duration: float | No
     return 0
 
 
-_SHELL_COMMS = {"login", "-zsh", "zsh", "-bash", "bash", "sh", "-sh", "fish", "-fish"}
-
 # Indirection so tests can monkeypatch the process-liveness check.
 _run = subprocess.run
 
 
 def probe_liveness(record: dict) -> Liveness:
-    """Is the process behind this slot's terminal still running?
-
-    UNKNOWN covers both "we can't tell" (a ps failure/timeout) and
-    "there's nothing to check" (a --no-open record has no terminal_tty at
-    all) — in both cases the bridge can't safely conclude DEAD, so only
-    hooks or an explicit `clear` can free the slot.
+    """Thin wrapper: the real implementation is liveness.ProcessProber.
+    Constructing it fresh on every call (rather than once at import time)
+    means `_run`/`os.path.exists` are read at call time, so tests that
+    monkeypatch them here keep working unchanged.
     """
-    tty_path = record.get("terminal_tty")
-    if not tty_path:
-        return Liveness.UNKNOWN
-    if not os.path.exists(tty_path):
-        return Liveness.DEAD  # tab closed: the pty node is gone
-    try:
-        result = _run(
-            ["ps", "-o", "comm=", "-t", os.path.basename(tty_path)],
-            capture_output=True, text=True, timeout=2.0, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return Liveness.UNKNOWN
-    if result.returncode not in (0, 1):
-        return Liveness.UNKNOWN
-    comms = {line.strip().rsplit("/", 1)[-1] for line in result.stdout.splitlines() if line.strip()}
-    return Liveness.ALIVE if (comms - _SHELL_COMMS) else Liveness.DEAD
+    return ProcessProber(run=_run, exists=os.path.exists).probe(record)
 
 
 def _dead_probe_confirmed(state: BridgeState, slot_key: str) -> bool:
@@ -752,51 +582,10 @@ def _liveness_ticker(state: BridgeState, stop_event: threading.Event, interval: 
             traceback.print_exc(file=sys.stderr)
 
 
-HOOK_HOST = "127.0.0.1"
-HOOK_PORT = int(os.environ.get("SWITCHBOARD_HOOK_PORT", "8877"))
-HOOK_PATH_PREFIX = "/switchboard-hook/"
-# Substring used to identify Switchboard's own entries in ~/.claude/settings.json
-# and $CODEX_HOME/hooks.json so re-installing (or another tool's installer) never
-# clobbers unrelated hooks. Distinct from OpenMicro's /om-hook/ and vibesense's
-# /hook/ markers, so all three can coexist.
-HOOK_MARKER = f"{HOOK_HOST}:{HOOK_PORT}{HOOK_PATH_PREFIX}"
-
-# Real lifecycle hook events, not screen-scraped guesses — see
-# https://github.com/stephenleo/OpenMicro, which validated this approach.
-# PreToolUse only fires for AskUserQuestion (see CLAUDE_HOOK_EVENTS' matcher).
-# CLAUDE_HOOK_STATUS/CODEX_HOOK_STATUS/CODEX_HOOK_EVENTS/hook_status_for now
-# live in switchboard.model (imported above) — they're pure lookup tables.
-
-CLAUDE_HOOK_EVENTS: dict[str, str | None] = {
-    "SessionStart": None,
-    "UserPromptSubmit": None,
-    "PreToolUse": "AskUserQuestion",
-    "PostToolUse": None,
-    "Notification": None,
-    "Stop": None,
-    "SessionEnd": None,
-    # Fire for every subagent (Task-tool) run, including ones dispatched to
-    # run in the background that outlive the main turn's Stop event — see
-    # the "active_subagents" handling in _HookRequestHandler.do_POST, which
-    # is what these two exist to feed.
-    "SubagentStart": None,
-    "SubagentStop": None,
-}
-
-
-def _hook_command(event: str) -> str:
-    # --max-time 1 and `|| true` make this fire-and-forget: it no-ops
-    # harmlessly (within ~1s) whenever the bridge isn't running, so the
-    # hook never needs uninstalling and never blocks the CLI on our behalf.
-    return (
-        f"curl -s --max-time 1 -X POST http://{HOOK_HOST}:{HOOK_PORT}{HOOK_PATH_PREFIX}{event} "
-        f'-H "X-Switchboard-Slot: $SWITCHBOARD_SLOT" -d @- >/dev/null 2>&1 || true'
-    )
-
-
-def _codex_hook_command(event: str) -> str:
-    # Codex hook commands must print a JSON object as their result.
-    return _hook_command(event) + "; printf '{}'"
+# HOOK_HOST/HOOK_PORT/HOOK_PATH_PREFIX/HOOK_MARKER/CLAUDE_HOOK_EVENTS and the
+# install_claude_hooks/install_codex_hooks/_claude_group_is_ours functions
+# now live in switchboard.hooks_server / switchboard.hooks_install (imported
+# above) — this is still the old in-process HTTP handler (deleted in 1.4).
 
 
 def _parse_body(body: bytes) -> dict:
@@ -938,92 +727,6 @@ def start_hook_server(state: BridgeState) -> http.server.ThreadingHTTPServer | N
     return server
 
 
-def _claude_group_is_ours(group: dict) -> bool:
-    hooks = group.get("hooks") if isinstance(group, dict) else None
-    if not isinstance(hooks, list):
-        return False
-    return any(isinstance(h, dict) and HOOK_MARKER in h.get("command", "") for h in hooks)
-
-
-def install_claude_hooks(settings_path: Path | None = None) -> str:
-    path = settings_path or (Path.home() / ".claude" / "settings.json")
-    settings: dict = {}
-    if path.exists():
-        try:
-            settings = json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError) as exc:
-            print(f"Could not parse {path}: {exc}", file=sys.stderr)
-            return "failed"
-    settings.setdefault("hooks", {})
-    changed = False
-    for event, matcher in CLAUDE_HOOK_EVENTS.items():
-        groups = [g for g in settings["hooks"].get(event, []) if isinstance(g, dict)]
-        foreign = [g for g in groups if not _claude_group_is_ours(g)]
-        desired = {"hooks": [{"type": "command", "command": _hook_command(event)}]}
-        if matcher is not None:
-            desired = {"matcher": matcher, **desired}
-        existing_ours = [g for g in groups if _claude_group_is_ours(g)]
-        if len(existing_ours) == 1 and existing_ours[0] == desired:
-            continue
-        settings["hooks"][event] = foreign + [desired]
-        changed = True
-    if not changed:
-        return "unchanged"
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + f".{os.getpid()}.switchboard-tmp")
-        tmp.write_text(json.dumps(settings, indent=2) + "\n")
-        tmp.replace(path)
-    except OSError as exc:
-        print(f"Could not write {path}: {exc}", file=sys.stderr)
-        return "failed"
-    return "changed"
-
-
-def install_codex_hooks(hooks_path: Path | None = None) -> str:
-    codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
-    path = hooks_path or (codex_home / "hooks.json")
-    settings: dict = {}
-    if path.exists():
-        try:
-            settings = json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError) as exc:
-            print(f"Could not parse {path}: {exc}", file=sys.stderr)
-            return "failed"
-    settings.setdefault("hooks", {})
-    before = json.dumps(settings, sort_keys=True)
-
-    for event in list(settings["hooks"].keys()):
-        value = settings["hooks"][event]
-        if not isinstance(value, list):
-            continue
-        foreign = [g for g in value if not _claude_group_is_ours(g)]
-        if foreign:
-            settings["hooks"][event] = foreign
-        else:
-            settings["hooks"].pop(event, None)
-
-    for event in CODEX_HOOK_EVENTS:
-        groups = settings["hooks"].get(event, [])
-        if not isinstance(groups, list):
-            groups = []
-        groups.append({"hooks": [{"type": "command", "command": _codex_hook_command(event)}]})
-        settings["hooks"][event] = groups
-
-    after = json.dumps(settings, sort_keys=True)
-    if after == before:
-        return "unchanged"
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + f".{os.getpid()}.switchboard-tmp")
-        tmp.write_text(json.dumps(settings, indent=2) + "\n")
-        tmp.replace(path)
-    except OSError as exc:
-        print(f"Could not write {path}: {exc}", file=sys.stderr)
-        return "failed"
-    return "changed"
-
-
 def install_hooks(args: argparse.Namespace) -> int:
     claude_result = install_claude_hooks()
     codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
@@ -1086,181 +789,27 @@ def run_bridge_listener(
             hook_server.shutdown()
 
 
-def terminal_command(cwd: str, command: str, title: str, slot: int | None = None) -> str:
-    lines = [
-        f"printf '\\033]0;%s\\007' {shlex.quote(title)}",
-        f"cd {shlex.quote(cwd)}",
-    ]
-    if slot is not None:
-        # Lets this session's lifecycle hooks (see install-hooks) tag their
-        # POST with which slot they came from — same trick OpenMicro uses
-        # with OPENMICRO_INSTANCE_ID.
-        lines.append(f"export SWITCHBOARD_SLOT={int(slot)}")
-    lines.append(f"exec {command}")
-    return "\n".join(lines)
-
-
-def resolve_command(command: str) -> str:
-    parts = shlex.split(command)
-    if not parts:
-        raise ValueError("Command is empty")
-
-    executable = parts[0]
-    if "/" in executable:
-        if Path(executable).expanduser().exists():
-            parts[0] = str(Path(executable).expanduser())
-            return shlex.join(parts)
-        raise FileNotFoundError(f"Command not found: {executable}")
-
-    found = shutil.which(executable)
-    if found:
-        parts[0] = found
-        return shlex.join(parts)
-
-    for candidate in KNOWN_COMMAND_PATHS.get(executable, []):
-        candidate_path = Path(candidate).expanduser()
-        if candidate_path.exists():
-            parts[0] = str(candidate_path)
-            return shlex.join(parts)
-
-    raise FileNotFoundError(f"Command not found on PATH: {executable}")
+# The one AppleScriptTerminal instance the not-yet-migrated code below
+# (open_terminal/focus_terminal_tab/get_terminal_pid/post_key_event; the
+# Bridge in 1.4 takes a TerminalDriver directly instead) drives Terminal.app
+# through.
+_terminal = AppleScriptTerminal()
 
 
 def open_terminal(command: str) -> str | None:
-    """Open a new Terminal tab running command, return its tty path.
-
-    The tty is a stable per-tab identifier (Terminal tabs have no usable `id`
-    property) that later lets the bridge find this exact tab again to push a
-    live effort change into it, instead of guessing at "front window".
-    """
-    script = """
-on run argv
-  set bridgeCommand to item 1 of argv
-  tell application "Terminal"
-    set newTab to do script bridgeCommand
-    activate
-    set ttyName to tty of newTab
-  end tell
-  return ttyName
-end run
-"""
-    result = subprocess.run(
-        ["osascript", "-e", script, command],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    tty_name = result.stdout.strip()
-    return tty_name or None
+    return _terminal.open(command)
 
 
 def focus_terminal_tab(tty_name: str) -> bool:
-    """Bring the window owning tty_name to front and select that exact tab.
-
-    Used before driving a slot's session (voice hold, future agent.focus)
-    so the right tab actually has keyboard focus, not just "some Terminal
-    window."
-    """
-    script = """
-on run argv
-  set targetTty to item 1 of argv
-  tell application "Terminal"
-    set targetWindow to missing value
-    set targetTab to missing value
-    repeat with w in windows
-      repeat with t in tabs of w
-        if tty of t is targetTty then
-          set targetWindow to w
-          set targetTab to t
-        end if
-      end repeat
-    end repeat
-    if targetWindow is missing value then
-      return "missing"
-    end if
-    set selected tab of targetWindow to targetTab
-    set index of targetWindow to 1
-    activate
-  end tell
-  return "ok"
-end run
-"""
-    result = subprocess.run(
-        ["osascript", "-e", script, tty_name],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip() == "ok"
+    return _terminal.focus(tty_name)
 
 
 def get_terminal_pid() -> int | None:
-    """PID of the Terminal.app process, for posting synthetic key events to it."""
-    result = subprocess.run(
-        ["osascript", "-e", 'tell application "System Events" to return unix id of (first process whose name is "Terminal")'],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    text = result.stdout.strip()
-    return int(text) if text.isdigit() else None
+    return _terminal.terminal_pid()
 
 
 def post_key_event(pid: int, keycode: int, key_down: bool) -> None:
-    """Post a synthetic keyDown/keyUp to a specific process (not just 'frontmost').
-
-    This is what makes real press-and-hold possible — AppleScript's `keystroke`
-    only ever sends an atomic press+release, which can't represent "held."
-    Requires the bridge process to have Accessibility permission (System
-    Settings -> Privacy & Security -> Accessibility).
-    """
-    if not QUARTZ_AVAILABLE:
-        raise RuntimeError(
-            "Quartz is not installed. Run the bridge with host/.venv/bin/python3, "
-            "or `pip install pyobjc-framework-Quartz` for whatever Python runs it."
-        )
-    event = Quartz.CGEventCreateKeyboardEvent(None, keycode, key_down)
-    Quartz.CGEventPostToPid(pid, event)
-
-
-def restart_in_slot_terminal(tty_name: str, shell_command: str) -> bool:
-    """Interrupt whatever is running in tty_name's tab, then run shell_command.
-
-    Sends a real Ctrl-C (ASCII ETX) into the tab first so an interactive TUI
-    (codex/claude) drops back to a shell prompt, then types the new command.
-    Returns False if the tab is gone (window/tab closed since launch).
-    """
-    script = """
-on run argv
-  set targetTty to item 1 of argv
-  set payload to item 2 of argv
-  tell application "Terminal"
-    set targetTab to missing value
-    repeat with w in windows
-      repeat with t in tabs of w
-        if tty of t is targetTty then
-          set targetTab to t
-        end if
-      end repeat
-    end repeat
-    if targetTab is missing value then
-      return "missing"
-    end if
-    do script (ASCII character 3) in targetTab
-    delay 0.4
-    do script payload in targetTab
-    activate
-  end tell
-  return "ok"
-end run
-"""
-    result = subprocess.run(
-        ["osascript", "-e", script, tty_name, shell_command],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip() == "ok"
+    _terminal.post_key(pid, keycode, key_down)
 
 
 def launch_agent(args: argparse.Namespace) -> int:
@@ -1269,19 +818,18 @@ def launch_agent(args: argparse.Namespace) -> int:
         print("Slots 1 through 4 map to the v1 agent keys.", file=sys.stderr)
         return 2
 
-    cwd = str(Path(args.cwd).expanduser().resolve())
-    if not Path(cwd).exists():
-        documents_dir = Path.home() / "Documents"
-        if documents_dir in Path(cwd).parents or Path(cwd) == documents_dir:
-            Path(cwd).mkdir(parents=True, exist_ok=True)
-            print(f"Created {cwd}")
-        else:
-            print(
-                f"Working folder does not exist: {cwd}. Set it with: "
-                f"switchboard_bridge.py config --slot {slot} --cwd PATH",
-                file=sys.stderr,
-            )
-            return 2
+    existed_before = Path(args.cwd).expanduser().resolve().exists()
+    try:
+        cwd = _validate_or_create_cwd(args.cwd)
+    except ValueError:
+        print(
+            f"Working folder does not exist: {Path(args.cwd).expanduser().resolve()}. Set it with: "
+            f"switchboard_bridge.py config --slot {slot} --cwd PATH",
+            file=sys.stderr,
+        )
+        return 2
+    if not existed_before:
+        print(f"Created {cwd}")
 
     try:
         base_command = resolve_command(args.command)
@@ -1398,23 +946,6 @@ def _write_agents_config(path: Path, config: dict) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(tmp, path)
-
-
-def _validate_or_create_cwd(cwd_str: str) -> str:
-    """Resolve cwd_str, creating it if missing and it's under ~/Documents.
-
-    Raises ValueError (with a user-facing message) if it's missing and
-    outside ~/Documents — creating an arbitrary path elsewhere on the
-    filesystem on the user's behalf is not something to do silently.
-    """
-    resolved = Path(cwd_str).expanduser().resolve()
-    if not resolved.exists():
-        documents_dir = Path.home() / "Documents"
-        if resolved == documents_dir or documents_dir in resolved.parents:
-            resolved.mkdir(parents=True, exist_ok=True)
-        else:
-            raise ValueError(f"Working folder does not exist: {resolved}")
-    return str(resolved)
 
 
 def config_command(args: argparse.Namespace) -> int:

@@ -1,6 +1,8 @@
 import subprocess
 
 import switchboard_bridge as sb
+from switchboard.liveness import ProcessProber
+from switchboard.model import Liveness
 
 
 def make_record(slot=1, tty="/dev/ttys001", **extra):
@@ -13,38 +15,34 @@ def fake_result(stdout="", returncode=0):
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
 
 
-def test_alive_when_agent_process_on_tty(monkeypatch):
-    monkeypatch.setattr(sb.os.path, "exists", lambda p: True)
-    monkeypatch.setattr(sb, "_run", lambda *a, **k: fake_result("login\nclaude\n"))
-    assert sb.probe_liveness(make_record()) is sb.Liveness.ALIVE
+def test_alive_when_agent_process_on_tty():
+    prober = ProcessProber(run=lambda *a, **k: fake_result("login\nclaude\n"), exists=lambda p: True)
+    assert prober.probe(make_record()) is Liveness.ALIVE
 
 
-def test_dead_when_only_shell_on_tty(monkeypatch):
-    monkeypatch.setattr(sb.os.path, "exists", lambda p: True)
-    monkeypatch.setattr(sb, "_run", lambda *a, **k: fake_result("login\n-zsh\n"))
-    assert sb.probe_liveness(make_record()) is sb.Liveness.DEAD
+def test_dead_when_only_shell_on_tty():
+    prober = ProcessProber(run=lambda *a, **k: fake_result("login\n-zsh\n"), exists=lambda p: True)
+    assert prober.probe(make_record()) is Liveness.DEAD
 
 
-def test_dead_when_tty_missing(monkeypatch):
-    monkeypatch.setattr(sb.os.path, "exists", lambda p: False)
+def test_dead_when_tty_missing():
     calls = []
-    monkeypatch.setattr(sb, "_run", lambda *a, **k: calls.append(1) or fake_result(""))
-    assert sb.probe_liveness(make_record()) is sb.Liveness.DEAD
+    prober = ProcessProber(run=lambda *a, **k: calls.append(1) or fake_result(""), exists=lambda p: False)
+    assert prober.probe(make_record()) is Liveness.DEAD
     assert not calls
 
 
-def test_unknown_on_timeout(monkeypatch):
-    monkeypatch.setattr(sb.os.path, "exists", lambda p: True)
-
+def test_unknown_on_timeout():
     def raise_timeout(*a, **k):
         raise subprocess.TimeoutExpired(cmd="ps", timeout=2.0)
 
-    monkeypatch.setattr(sb, "_run", raise_timeout)
-    assert sb.probe_liveness(make_record()) is sb.Liveness.UNKNOWN
+    prober = ProcessProber(run=raise_timeout, exists=lambda p: True)
+    assert prober.probe(make_record()) is Liveness.UNKNOWN
 
 
 def test_unknown_on_no_tty_record():
-    assert sb.probe_liveness({"slot": 1}) is sb.Liveness.UNKNOWN
+    prober = ProcessProber()
+    assert prober.probe({"slot": 1}) is Liveness.UNKNOWN
 
 
 def test_free_requires_two_consecutive_dead(monkeypatch, registry_path):

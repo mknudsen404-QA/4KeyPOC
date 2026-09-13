@@ -2,26 +2,29 @@ import sys
 import threading
 import time
 
-import switchboard_bridge as sb
+from switchboard.registry import Registry
+
+import switchboard_bridge as sb  # only for the cross-process shim check
 
 
 def test_save_is_atomic_under_concurrent_reads(registry_path):
-    sb.save_registry({"version": 1, "slots": {}, "counter": 0}, registry_path)
+    registry = Registry(registry_path)
+    registry.save({"version": 1, "slots": {}, "counter": 0})
 
     errors = []
 
     def writer():
         try:
             for _ in range(200):
-                with sb.registry_transaction(registry_path) as registry:
-                    registry["counter"] = registry.get("counter", 0) + 1
+                with registry.transaction() as reg:
+                    reg["counter"] = reg.get("counter", 0) + 1
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 
     def reader():
         try:
             for _ in range(200):
-                sb.load_registry(registry_path)
+                registry.load()
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 
@@ -32,18 +35,19 @@ def test_save_is_atomic_under_concurrent_reads(registry_path):
         t.join()
 
     assert not errors
-    assert sb.load_registry(registry_path)["counter"] == 1600
+    assert registry.load()["counter"] == 1600
 
 
 def test_transaction_serializes_across_processes(registry_path):
-    sb.save_registry({"version": 1, "slots": {}}, registry_path)
+    registry = Registry(registry_path)
+    registry.save({"version": 1, "slots": {}})
     bridge_path = str((sb.HOST_DIR / "switchboard_bridge.py"))
 
     result_holder = {}
 
     def hold_transaction():
-        with sb.registry_transaction(registry_path) as registry:
-            registry["held"] = True
+        with registry.transaction() as reg:
+            reg["held"] = True
             time.sleep(0.5)
 
     holder_thread = threading.Thread(target=hold_transaction)
@@ -65,8 +69,24 @@ def test_transaction_serializes_across_processes(registry_path):
 
 
 def test_no_tmp_files_left_behind(registry_path):
+    registry = Registry(registry_path)
     for _ in range(10):
-        with sb.registry_transaction(registry_path) as registry:
-            registry["x"] = registry.get("x", 0) + 1
+        with registry.transaction() as reg:
+            reg["x"] = reg.get("x", 0) + 1
     leftovers = list(registry_path.parent.glob(f"{registry_path.name}.*.tmp"))
     assert leftovers == []
+
+
+def test_load_missing_file_returns_empty_registry(registry_path):
+    registry = Registry(registry_path)
+    assert registry.load() == {"version": 1, "slots": {}}
+
+
+def test_load_rejects_non_object_json(registry_path, tmp_path):
+    registry_path.write_text("[1, 2, 3]")
+    registry = Registry(registry_path)
+    try:
+        registry.load()
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
