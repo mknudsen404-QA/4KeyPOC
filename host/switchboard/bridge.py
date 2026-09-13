@@ -202,4 +202,11 @@ class Bridge:
         finally:
             stop.set()
             if hook_server is not None:
-                hook_server.shutdown()
+                # shutdown() blocks until serve_forever()'s loop notices and
+                # exits — bound the wait so a slow/stuck HTTP server can
+                # never keep run() (and whatever's join()ing its thread)
+                # from returning. Always release the socket either way.
+                shutdown_thread = threading.Thread(target=hook_server.shutdown, daemon=True)
+                shutdown_thread.start()
+                shutdown_thread.join(timeout=2.0)
+                hook_server.server_close()

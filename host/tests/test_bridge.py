@@ -112,7 +112,10 @@ def test_worker_survives_step_exception(tmp_path):
 
     device.send = flaky_send
 
-    thread = threading.Thread(target=bridge.run, kwargs={"duration": 0.6})
+    # hook_port=0: let the OS pick a free ephemeral port (this test doesn't
+    # exercise hooks) instead of the default 8877, which a real bridge
+    # LaunchAgent may already hold on a dev machine.
+    thread = threading.Thread(target=bridge.run, kwargs={"duration": 0.6, "hook_port": 0})
     thread.start()
     time.sleep(0.05)
     bridge.submit(BoardEvent("agent.select", {"slot": 1}))  # triggers the flaky raise
