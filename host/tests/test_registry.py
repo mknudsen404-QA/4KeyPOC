@@ -47,7 +47,7 @@ def test_transaction_serializes_across_processes(registry_path):
     def hold_transaction():
         with registry.transaction() as reg:
             reg["held"] = True
-            time.sleep(0.5)
+            time.sleep(0.8)
 
     holder_thread = threading.Thread(target=hold_transaction)
     holder_thread.start()
@@ -64,7 +64,10 @@ def test_transaction_serializes_across_processes(registry_path):
     elapsed = time.monotonic() - start
     holder_thread.join()
 
-    assert elapsed >= 0.4
+    # Loose bound: proves the CLI genuinely blocked on the held lock
+    # (would be near-instant otherwise) without being tight enough to
+    # flake on a slower/shared CI runner.
+    assert elapsed >= 0.5
 
 
 def test_no_tmp_files_left_behind(registry_path):

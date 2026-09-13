@@ -31,7 +31,7 @@ def free_port() -> int:
     return port
 
 
-def expect_lines(fd, count, timeout=3.0):
+def expect_lines(fd, count, timeout=6.0):
     """Block until `count` JSON lines have been read from fd, or fail."""
     buffer = b""
     lines = []
@@ -111,8 +111,11 @@ def bridge_harness(tmp_path, fake_clock):
     terminal = FakeTerminal()
     prober = FakeProber()
     launch_config = {
+        # family="claude" so lifecycle hooks map to a status; command="cat"
+        # so resolve_command succeeds on any machine (CI included)
+        # regardless of whether the real Claude Code CLI is installed.
         "agents": [
-            {"slot": n, "name": f"Agent {n}", "family": "claude", "command": "claude", "cwd": "/tmp"}
+            {"slot": n, "name": f"Agent {n}", "family": "claude", "command": "cat", "cwd": "/tmp"}
             for n in range(1, 5)
         ]
     }

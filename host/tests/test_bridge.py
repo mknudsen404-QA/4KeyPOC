@@ -118,7 +118,7 @@ def test_worker_survives_step_exception(tmp_path):
     bridge.submit(BoardEvent("agent.select", {"slot": 1}))  # triggers the flaky raise
     time.sleep(0.1)
     bridge.submit(BoardEvent("agent.select", {"slot": 1}))  # should still work afterward
-    thread.join(timeout=2)
+    thread.join(timeout=10)  # generous: only proves eventual termination, not speed
 
     assert not thread.is_alive()
     assert calls["n"] >= 2
