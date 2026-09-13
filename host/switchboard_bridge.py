@@ -120,7 +120,6 @@ class BridgeState:
     selected_agent: str | None = None
     effort_by_slot: dict[int, str] | None = None
     mic_active: bool = False
-    registry: dict | None = None
     registry_path: Path = DEFAULT_REGISTRY
     auto_launch: bool = False
     launch_config: dict | None = None
@@ -394,11 +393,24 @@ def agent_update_event(record: dict) -> dict:
     }
 
 
+# Guards os.write(device_fd, ...) below. Without it, concurrent writers to
+# the one shared serial fd — the main listener loop, the poll_slot_logs
+# background thread, and each ThreadingHTTPServer hook-request thread (two
+# CLIs can fire lifecycle hooks within milliseconds of each other) — can
+# interleave their bytes mid-write. The firmware reads line-by-line, so an
+# interleaved write becomes one malformed JSON line that deserializeJson
+# silently drops, leaving that key's LED stuck showing whatever color it
+# had before (e.g. the initial "launched" blue never advancing to "idle"
+# white) until the next status change happens to get through cleanly.
+_DEVICE_WRITE_LOCK = threading.Lock()
+
+
 def write_device_event(fd: int | None, event: dict) -> None:
     if fd is None:
         return
     line = json.dumps(event, separators=(",", ":")) + "\n"
-    os.write(fd, line.encode("utf-8"))
+    with _DEVICE_WRITE_LOCK:
+        os.write(fd, line.encode("utf-8"))
 
 
 def write_slot_update(fd: int | None, registry: dict, slot: int | str) -> None:
@@ -415,7 +427,12 @@ def write_slot_update(fd: int | None, registry: dict, slot: int | str) -> None:
 
 def describe_event(event: dict, state: BridgeState) -> str:
     name = event.get("event")
-    registry = state.registry or {"slots": {}}
+    # Always read the registry fresh: it's also written by the HTTP hook
+    # server and the log-polling thread, both on their own threads, so a
+    # cached copy here would go stale the moment either of them fires and
+    # get pushed to the device on the next button press, repainting a key
+    # with an old status.
+    registry = load_registry(state.registry_path)
 
     if name == "agent.select":
         state.selected_slot = int(event.get("slot", 0)) or None
@@ -437,8 +454,8 @@ def describe_event(event: dict, state: BridgeState) -> str:
                     dry_run=state.dry_run,
                     no_open=state.no_open,
                 )
-                state.registry = load_registry(state.registry_path)
-                write_slot_update(state.device_fd, state.registry, state.selected_slot)
+                registry = load_registry(state.registry_path)
+                write_slot_update(state.device_fd, registry, state.selected_slot)
                 return message
             # Slot already has a live session — re-selecting it should bring
             # its window to front, not just repaint the LED. (A freshly
@@ -486,8 +503,8 @@ def describe_event(event: dict, state: BridgeState) -> str:
         # it doesn't need to also occupy the activity line.
         update_registry_slot_status(state.registry_path, slot, effort=effort)
         state.effort_by_slot[slot] = effort
-        state.registry = load_registry(state.registry_path)
-        write_slot_update(state.device_fd, state.registry, slot)
+        registry = load_registry(state.registry_path)
+        write_slot_update(state.device_fd, registry, slot)
         if pushed:
             return f"Reasoning effort for agent {slot}: {effort} (restarted live session)"
         return f"Reasoning effort for agent {slot}: {effort} (no live terminal to update)"
@@ -568,7 +585,7 @@ def handle_line(line: str, state: BridgeState) -> str | None:
 
 
 def run_listener(lines: Iterable[str], registry_path: Path, duration: float | None = None) -> int:
-    state = BridgeState(registry=load_registry(registry_path), registry_path=registry_path)
+    state = BridgeState(registry_path=registry_path)
     started = time.monotonic()
     for line in lines:
         message = handle_line(line, state)
@@ -657,7 +674,6 @@ def poll_slot_logs(state: BridgeState, stop_event: threading.Event, interval: fl
             slots.pop(slot_key, None)
         if changed_slots or freed_slots:
             save_registry(registry, state.registry_path)
-            state.registry = registry
             for slot_key in changed_slots + freed_slots:
                 write_slot_update(state.device_fd, registry, slot_key)
 
@@ -972,7 +988,6 @@ def run_bridge_listener(
     device_fd: int | None = None,
 ) -> int:
     state = BridgeState(
-        registry=load_registry(registry_path),
         registry_path=registry_path,
         auto_launch=auto_launch,
         launch_config=load_agents_config(launch_config_path),
