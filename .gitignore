@@ -19,3 +19,6 @@ host/agent_registry.json
 host/agents.json
 
 .DS_Store
+
+# KiCad generator bytecode
+hardware/kicad/tools/__pycache__/

@@ -2,7 +2,7 @@
 
 Standalone proof-of-concept for the
 [plug-and-play installer plan](../../docs/design/plug-and-play-installer-plan.md).
-Deliberately separate from `firmware/neokey/codex_micro_neokey.ino` — no
+Deliberately separate from `firmware/neokey/switchboard_neokey.ino` — no
 NeoKey/seesaw code, no shared state — so it's safe to flash to a spare
 ESP32-S3 board without touching the working NeoKey firmware.
 

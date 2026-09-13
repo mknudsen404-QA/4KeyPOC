@@ -4,7 +4,7 @@ This is a separate copy of Hiwonder `Source Code/06_lvgl_font`. The original sou
 
 ## What this version does
 
-A dark 320 x 240 screen shows CODEX MICRO CONSOLE, a selected agent card, status, activity, current reasoning effort, a four-agent status bank, and the first command-bank labels.
+A dark 320 x 240 screen shows SWITCHBOARD, a selected agent card, status, activity, current reasoning effort, a four-agent status bank, and the first command-bank labels.
 
 - Four neutral agent slots are modeled in firmware: `Agent 1`, `Agent 2`, `Agent 3`, and `Agent 4`. These are slot identities, not pretend task labels. All slots boot as empty until the bridge owns them.
 - Six command slots are modeled in firmware: approve, review, run, microphone, slash command, and back/cancel.
@@ -54,7 +54,7 @@ Before uploading future changes, retain the exact working Arduino sketch and its
 
 After a successful build and deliberate upload, verify:
 
-1. CODEX MICRO CONSOLE appears with an agent card, status, activity, effort, and four agent status rows.
+1. SWITCHBOARD appears with an agent card, status, activity, effort, and four agent status rows.
 2. KEY1 and KEY2 move between the four fake agent slots.
 3. KEY3 cycles the visible effort label and emits an `agent.reasoning.apply` event.
 4. Holding KEY4 shows microphone feedback and emits `voice.hold.start`; releasing KEY4 emits `voice.hold.stop`.
@@ -76,7 +76,7 @@ See `host/EXTERNAL_KEY_SPIKE.md`.
 
 ## Design notes
 
-The next control-surface decisions are tracked in `CODEX_MICRO_CONSOLE_DESIGN.md`.
+The next control-surface decisions are tracked in `SWITCHBOARD_DESIGN.md`.
 
 ## Host bridge
 

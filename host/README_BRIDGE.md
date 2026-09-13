@@ -203,7 +203,7 @@ Safe to re-run any time (idempotent, merges into your existing
 `~/.claude/settings.json` / `$CODEX_HOME/hooks.json` without touching unrelated
 settings). Takes effect for sessions launched *after* this runs — an
 already-open Terminal window won't pick up new hooks until restarted. See
-"Status Auto-Detection Plan" in `CODEX_MICRO_CONSOLE_DESIGN.md` for how it works
+"Status Auto-Detection Plan" in `SWITCHBOARD_DESIGN.md` for how it works
 and its known gaps (credit to [OpenMicro](https://github.com/stephenleo/OpenMicro)
 for validating this approach).
 
@@ -373,7 +373,7 @@ quick add. Revisit after duration escalation is proven out.
 The bridge tees every launched session's raw output to `host/logs/slot-N.log`
 (via `script -q`) and a background thread tails it, pattern-matching for
 status changes — see "Status Auto-Detection Plan" in
-`CODEX_MICRO_CONSOLE_DESIGN.md`. To test that whole pipeline — log → poll
+`SWITCHBOARD_DESIGN.md`. To test that whole pipeline — log → poll
 thread → registry → serial push → screen — without launching a real codex/claude
 session:
 

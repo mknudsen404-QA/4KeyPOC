@@ -17,4 +17,4 @@ Two pages, six artboards:
 
 `canvas.json` lays all six out on one pan/zoom canvas across the two pages. These are Claude Design Components (`.dc.html`), not standalone web pages — see the published link for the interactive version.
 
-See "Proof-of-Concept Hardware — Locked" and "V2 Direction: Custom Single PCB" in `../../CODEX_MICRO_CONSOLE_DESIGN.md` for the parts list and design rationale these mockups are based on.
+See "Proof-of-Concept Hardware — Locked" and "V2 Direction: Custom Single PCB" in `../../SWITCHBOARD_DESIGN.md` for the parts list and design rationale these mockups are based on.

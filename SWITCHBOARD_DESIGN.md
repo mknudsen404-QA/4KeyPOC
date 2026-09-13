@@ -698,6 +698,14 @@ Customization mechanism: follow the same pattern as `host/agents.json` — a per
 
 ## V2 Direction: Custom Single PCB
 
+**Status update: real design work has started.** Three KiCad 10 projects now live in
+`hardware/kicad/` (`4key/`, `8key/`, `12key/`) — parametrically generated from one shared
+part/net table, with clean ERC and clean DRC, power/ground/I2C and the full per-key LED chain
+routed, and the key-matrix and USB pair still left for manual routing. See
+`hardware/kicad/README.md` for the per-board status and the list of things that must be verified
+before a fab run. The version-identification easter-egg scheme ("The Tally") lives on the
+3D-printed case - badge geometry and the scheme description are in `hardware/enclosure/`.
+
 Once the POC validates the concept, the better long-term hardware is a single custom PCB rather than three purchased NeoKey modules — this trades "buy it, plug it in" convenience for a cheaper, more cohesive finished product. Not started; documented here so the tradeoff is explicit before committing.
 
 **Architecture:** one PCB shaped to the actual tilted-numpad enclosure, carrying:

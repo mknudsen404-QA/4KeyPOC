@@ -590,7 +590,7 @@ def strip_ansi(text: str) -> str:
 # than guessed at length — they have not been calibrated against a real
 # codex/claude session transcript yet. Treat status auto-detection as
 # best-effort until verified live and expand this list from what's actually
-# observed (see Status Auto-Detection Plan in CODEX_MICRO_CONSOLE_DESIGN.md).
+# observed (see Status Auto-Detection Plan in SWITCHBOARD_DESIGN.md).
 #
 # No "error"/"traceback" -> blocked pattern here on purpose: matching those
 # words anywhere in the last few KB of a log fires on any benign mention
@@ -713,6 +713,12 @@ CLAUDE_HOOK_EVENTS: dict[str, str | None] = {
     "Notification": None,
     "Stop": None,
     "SessionEnd": None,
+    # Fire for every subagent (Task-tool) run, including ones dispatched to
+    # run in the background that outlive the main turn's Stop event — see
+    # the "active_subagents" handling in _HookRequestHandler.do_POST, which
+    # is what these two exist to feed.
+    "SubagentStart": None,
+    "SubagentStop": None,
 }
 CODEX_HOOK_EVENTS = ("UserPromptSubmit", "PermissionRequest", "PostToolUse", "Stop", "SessionEnd")
 
@@ -740,6 +746,19 @@ def _codex_hook_command(event: str) -> str:
     return _hook_command(event) + "; printf '{}'"
 
 
+def _extract_agent_id(body: bytes) -> str | None:
+    if not body:
+        return None
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    agent_id = payload.get("agent_id")
+    return str(agent_id) if agent_id else None
+
+
 class _HookRequestHandler(http.server.BaseHTTPRequestHandler):
     state: BridgeState
 
@@ -748,30 +767,87 @@ class _HookRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
-        if length:
-            self.rfile.read(length)  # drain the body; payload contents aren't needed
+        body = self.rfile.read(length) if length else b""
         event = self.path.rsplit("/", 1)[-1]
         slot_key = (self.headers.get("X-Switchboard-Slot") or "").strip()
         if slot_key:
             registry = load_registry(self.state.registry_path)
             record = registry.get("slots", {}).get(slot_key)
             if record:
-                status = _hook_status_for(record.get("family", ""), event)
-                if status and status != record.get("status"):
-                    if status == "empty":
-                        # SessionEnd/`/exit`: actually free the slot (pop it),
-                        # not just flip a status field — auto-launch and the
-                        # slot cells only treat a MISSING record as available.
-                        registry.get("slots", {}).pop(slot_key, None)
-                    else:
-                        record["status"] = status
-                        record["last_updated_at"] = int(time.time())
+                dirty = self._apply_hook_event(registry, slot_key, record, event, body)
+                if dirty:
                     save_registry(registry, self.state.registry_path)
                     write_slot_update(self.state.device_fd, registry, slot_key)
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(b"{}")
+
+    @staticmethod
+    def _apply_hook_event(registry: dict, slot_key: str, record: dict, event: str, body: bytes) -> bool:
+        # A subagent (Task-tool run) can be dispatched to run in the
+        # background and keep going after the main turn's Stop event fires —
+        # Stop only means "the main turn is done", not "this slot is idle".
+        # Without this tracking, a slot would flash to "done"/green (or
+        # whatever the next main-thread status is) while a background
+        # subagent it just launched is still visibly working. SubagentStart/
+        # SubagentStop bracket each subagent run (by agent_id, so duplicate
+        # or out-of-order delivery can't double-count) and gate the deferred
+        # "done" until every subagent from this turn has actually finished.
+        if event in ("SubagentStart", "SubagentStop"):
+            agent_id = _extract_agent_id(body)
+            if not agent_id:
+                return False  # can't track reliably without an id; ignore
+            active = set(record.get("active_subagents", []))
+            if event == "SubagentStart":
+                if agent_id in active:
+                    return False
+                active.add(agent_id)
+                record["active_subagents"] = sorted(active)
+                if record.get("status") not in BUSY_STATUSES:
+                    record["status"] = "working"
+                    record["last_updated_at"] = int(time.time())
+                return True
+            # SubagentStop
+            if agent_id not in active:
+                return False
+            active.discard(agent_id)
+            record["active_subagents"] = sorted(active)
+            dirty = True
+            if not active and record.pop("main_stopped", False):
+                # The main turn already finished (Stop already fired) and
+                # this was the last subagent still outstanding — deliver the
+                # deferred "done" now.
+                record["status"] = "done"
+                record["last_updated_at"] = int(time.time())
+            return dirty
+
+        status = _hook_status_for(record.get("family", ""), event)
+        if not status:
+            return False
+        if status == "empty":
+            # SessionEnd/`/exit`: actually free the slot (pop it), not just
+            # flip a status field — auto-launch and the slot cells only
+            # treat a MISSING record as available.
+            registry.get("slots", {}).pop(slot_key, None)
+            return True
+        dirty = False
+        if status == "working" and record.pop("main_stopped", None):
+            # A new turn started while an old background subagent was still
+            # finishing — that subagent's eventual SubagentStop must not
+            # deliver a stale "done" for a slot that's busy again.
+            dirty = True
+        if status == record.get("status"):
+            return dirty
+        if status == "done" and record.get("active_subagents"):
+            # Defer: a subagent this turn dispatched is still running.
+            # SubagentStop will deliver "done" once the last one finishes.
+            record["main_stopped"] = True
+            return True
+        record["status"] = status
+        record["last_updated_at"] = int(time.time())
+        record.pop("main_stopped", None)
+        return True
 
 
 def start_hook_server(state: BridgeState) -> http.server.ThreadingHTTPServer | None:

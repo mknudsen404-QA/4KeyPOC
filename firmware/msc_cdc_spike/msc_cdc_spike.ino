@@ -2,11 +2,11 @@
 // See docs/design/plug-and-play-installer-plan.md for the full plan.
 //
 // Purpose: prove that Arduino-ESP32's native USB stack can present a
-// single ESP32-S3 as CDC (serial, same role as codex_micro_neokey.ino's
+// single ESP32-S3 as CDC (serial, same role as switchboard_neokey.ino's
 // runtime protocol) *and* MSC (a small read-only virtual drive) at the
 // same time, on the exact core version this project already has
 // installed. Deliberately standalone — no NeoKey/seesaw code, no shared
-// state with codex_micro_neokey.ino, so it can be flashed to any spare
+// state with switchboard_neokey.ino, so it can be flashed to any spare
 // ESP32-S3 board without touching the working NeoKey firmware.
 //
 // Board settings this sketch requires (Tools menu in Arduino IDE, or the
