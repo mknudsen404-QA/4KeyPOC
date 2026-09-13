@@ -122,6 +122,60 @@ re-flashing every board with a new stub.
   once it detects the bridge round-tripping real protocol traffic (fancier,
   not necessary for a first version).
 
+### Spike findings (resolved 2026-09-12)
+
+- **Flash/partition budget: a non-issue.** Read the working NeoKey board's
+  flash chip directly with esptool (`flash-id`, read-only — no write, no
+  firmware change): ESP32-S3 with **16MB flash / 8MB PSRAM**. The
+  `esp32:esp32:esp32s3` board already ships 16M partition schemes with
+  multi-megabyte FAT partitions (e.g. `app3M_fat9M_16MB` = 3MB
+  app / 9.9MB FATFS). More importantly, **we don't need a dedicated flash
+  partition at all**: the real installer payload is a few KB of shell
+  script, comfortably inside SRAM budget, so the MSC backing store can be
+  a small static RAM-resident FAT image (like Arduino-ESP32's own bundled
+  `USBMSC.ino` example does) instead of a flash partition. This sidesteps
+  partition-table changes — and any risk of colliding with
+  `codex_micro_neokey.ino`'s partition layout — entirely. Confirmed via a
+  compiled spike (see below): 62,832 bytes (19%) of the ~327KB dynamic
+  memory budget used with a full composite CDC+MSC stack running, leaving
+  plenty of headroom even after adding NeoKey/seesaw/ArduinoJson state.
+- **Composite CDC+MSC support: yes, cleanly, no core update needed.** The
+  currently-installed Arduino-ESP32 core (**3.3.11**) has first-class
+  support: `boards.txt` even exposes a board-menu-level `MSCOnBoot` option
+  alongside the `CDCOnBoot` one this project already uses, and the core
+  ships `USBMSC.h`/`USBMSC.cpp` plus a bundled composite example
+  (`libraries/USB/examples/USBMSC/USBMSC.ino`) demonstrating CDC (via
+  `Serial`, in native USB-OTG mode) and MSC coexisting via a shared
+  `USB.begin()`. Wrote a standalone spike sketch,
+  `firmware/msc_cdc_spike/msc_cdc_spike.ino` — deliberately separate from
+  `codex_micro_neokey.ino`, no NeoKey/seesaw code, safe to flash to a
+  spare board — and compile-verified it (no upload) against this exact
+  core with `arduino-cli compile --fqbn
+  esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB`:
+  builds clean, 353,446 bytes (11%) of app partition. Not yet flashed to
+  physical hardware — that needs a second board (see below) before this
+  spike can be called fully validated end-to-end.
+- **New sub-finding, not in the original open-questions list:** a bare
+  minimal FAT12 image only supports classic 8.3 short filenames (3-char
+  extension max), which can't hold `.command` (7 chars). The real
+  installer volume will need **VFAT long-filename (LFN) directory
+  entries** (extra 0x0F-attribute directory records ahead of the normal
+  8.3 entry) to expose a file actually named e.g.
+  `Install Switchboard.command`. This is a well-documented, mechanical
+  extension to the FAT12 image-building code already spiked — not a
+  blocker, just scoped into the next step (building the real installer
+  stub) rather than this composite-USB spike.
+- **MSC re-advertise-forever vs. stop-after-handshake: deferred, not
+  resolved.** Punting this to the simplest option (always advertise MSC)
+  for a first version, as the plan already allowed — no new information
+  changes that call.
+- **Not yet done:** flashing `msc_cdc_spike.ino` to real hardware and
+  confirming a Mac actually mounts the volume and Finder shows the file
+  correctly. This requires a second ESP32-S3 board (or explicit sign-off
+  to briefly reflash the working NeoKey board, with a plan to reflash
+  `codex_micro_neokey.ino` back immediately after) — not done yet pending
+  that decision.
+
 ## Relationship to the bigger picture
 
 This is one piece of the path from "4-key NeoKey proof of concept" to the
