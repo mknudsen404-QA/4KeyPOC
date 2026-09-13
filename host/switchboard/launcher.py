@@ -6,12 +6,23 @@ command and the bridge's Launch effect.
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from switchboard.model import command_with_effort, normalize_effort
+
+HOST_DIR = Path(__file__).resolve().parent.parent
+# agents.json is the user's own per-slot config (which CLI family/command each
+# agent key launches). It is personal/local, not checked in. agents.example.json
+# is the checked-in template; it's only used as a fallback until agents.json
+# exists, so first-time setup still works with no configuration.
+USER_AGENTS_CONFIG = HOST_DIR / "agents.json"
+EXAMPLE_AGENTS_CONFIG = HOST_DIR / "agents.example.json"
+DEFAULT_AGENTS_CONFIG = USER_AGENTS_CONFIG if USER_AGENTS_CONFIG.exists() else EXAMPLE_AGENTS_CONFIG
 
 DEFAULT_CWD = "~/Documents"
 
@@ -112,6 +123,83 @@ def terminal_command(cwd: str, command: str, title: str, slot: int | None = None
         lines.append(f"export SWITCHBOARD_SLOT={int(slot)}")
     lines.append(f"exec {command}")
     return "\n".join(lines)
+
+
+def _write_agents_config(path: Path, config: dict) -> None:
+    path = path.expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        json.dump(config, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
+def config_command(args) -> int:
+    """The `config` CLI subcommand: edit host/agents.json (per-slot launch
+    config). Takes an argparse.Namespace; kept here (not cli.py) because
+    it's really just structured editing of the file load_agents_config
+    reads, with the same fallback-to-example-config resolution.
+    """
+    agents_config_path = Path(args.agents_config).expanduser()
+    if agents_config_path.exists():
+        config = load_agents_config(agents_config_path)
+    elif EXAMPLE_AGENTS_CONFIG.exists():
+        config = load_agents_config(EXAMPLE_AGENTS_CONFIG)
+    else:
+        config = {"agents": []}
+
+    if args.show:
+        print(json.dumps(config, indent=2, sort_keys=True))
+        return 0
+
+    if args.default_cwd is not None:
+        try:
+            resolved = validate_or_create_cwd(args.default_cwd)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        config.setdefault("defaults", {})["cwd"] = resolved
+        _write_agents_config(agents_config_path, config)
+        print(f"Default cwd set to {resolved}.")
+        print("Takes effect on each slot's next launch.")
+        return 0
+
+    if args.slot is None:
+        print("Specify --slot, --default-cwd, or --show.", file=sys.stderr)
+        return 2
+
+    agents = config.setdefault("agents", [])
+    agent = next((a for a in agents if int(a.get("slot", 0)) == args.slot), None)
+    if agent is None:
+        agent = {"slot": args.slot}
+        agents.append(agent)
+
+    if args.cwd is not None:
+        try:
+            agent["cwd"] = validate_or_create_cwd(args.cwd)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    if args.name is not None:
+        agent["name"] = args.name
+    if args.family is not None:
+        agent["family"] = args.family
+    if args.command is not None:
+        agent["command"] = args.command
+    if args.effort is not None:
+        agent["effort"] = normalize_effort(args.effort)
+
+    _write_agents_config(agents_config_path, config)
+    print(
+        f"Slot {args.slot}: {agent.get('name', f'Agent {args.slot}')} "
+        f"({agent.get('family', 'codex')}) command={agent.get('command', 'codex')!r} "
+        f"cwd={resolve_agent_cwd(agent, config)}"
+    )
+    print("Takes effect on this slot's next launch.")
+    return 0
 
 
 @dataclass

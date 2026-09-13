@@ -95,6 +95,22 @@ def install_claude_hooks(settings_path: Path | None = None) -> str:
     return "changed"
 
 
+def install_hooks(args=None) -> int:
+    """The `install-hooks` CLI subcommand. Takes an (unused) argparse
+    Namespace so it matches every other subcommand function's signature.
+    """
+    claude_result = install_claude_hooks()
+    codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
+    codex_result = install_codex_hooks()
+    print(f"Claude Code hooks (~/.claude/settings.json): {claude_result}")
+    print(f"Codex hooks ({codex_home / 'hooks.json'}): {codex_result}")
+    if claude_result == "changed":
+        print("Claude Code will use the new hooks starting with its next session.")
+    if codex_result == "changed":
+        print("Codex may report changed hooks on next launch — trust them via /hooks in the session.")
+    return 0
+
+
 def install_codex_hooks(hooks_path: Path | None = None) -> str:
     codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
     path = hooks_path or (codex_home / "hooks.json")

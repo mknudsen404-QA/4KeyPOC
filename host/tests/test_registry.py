@@ -3,8 +3,7 @@ import threading
 import time
 
 from switchboard.registry import Registry
-
-import switchboard_bridge as sb  # only for the cross-process shim check
+from switchboard.cli import HOST_DIR  # only for the cross-process shim check
 
 
 def test_save_is_atomic_under_concurrent_reads(registry_path):
@@ -41,7 +40,7 @@ def test_save_is_atomic_under_concurrent_reads(registry_path):
 def test_transaction_serializes_across_processes(registry_path):
     registry = Registry(registry_path)
     registry.save({"version": 1, "slots": {}})
-    bridge_path = str((sb.HOST_DIR / "switchboard_bridge.py"))
+    bridge_path = str((HOST_DIR / "switchboard_bridge.py"))
 
     result_holder = {}
 

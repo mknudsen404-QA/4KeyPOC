@@ -198,6 +198,67 @@ class FileDevice:
         self.handle.close()
 
 
+def sync_device(args) -> int:
+    """The `sync` CLI subcommand: push registered slot(s)' current status
+    to the board (one shot, not a listener) and wait briefly for acks.
+    Takes an argparse.Namespace; kept here (not cli.py) since it's really
+    just SerialDevice.send()/.lines() plus registry reads.
+    """
+    import json
+    import sys
+
+    from switchboard.clock import SystemClock
+    from switchboard.model import agent_update_event
+    from switchboard.registry import Registry
+
+    clock = SystemClock()
+
+    if getattr(args, "slot", None) is None and getattr(args, "slot_pos", None) is not None:
+        args.slot = args.slot_pos
+
+    port = args.port or find_default_port()
+    if not port:
+        print("No USB serial port found. Plug in the board or pass --port.", file=sys.stderr)
+        return 2
+    registry = Registry(args.registry).load()
+    slots = registry.get("slots", {})
+    if args.slot and not slots.get(str(args.slot)):
+        print(f"Agent {args.slot} is not registered; nothing to sync.", file=sys.stderr)
+        return 2
+    targets = [str(args.slot)] if args.slot else sorted(slots, key=lambda s: int(s))
+
+    device = SerialDevice(port, args.baud)
+    try:
+        for slot_key in targets:
+            device.send(agent_update_event(slots[slot_key], clock.now()))
+        if args.slot:
+            print(f"Sent Agent {args.slot} status to board")
+        else:
+            print(f"Sent {len(targets)} registered agent slot(s) to board")
+
+        expected_acks = len(targets)
+        seen_acks = 0
+        for line in device.lines(duration=1.0):
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("event") == "agent.update.ack":
+                seen_acks += 1
+                print(f"Board applied update for Agent {event.get('slot')}")
+                if seen_acks >= expected_acks:
+                    break
+
+        if expected_acks and seen_acks == 0:
+            print("No board acknowledgement received; the screen may not have updated.", file=sys.stderr)
+            return 1
+    finally:
+        device.close()
+    return 0
+
+
 class FakeDevice:
     """Records everything sent; lines() yields whatever is fed to it and
     blocks (like a real device would) until close()."""
