@@ -1,5 +1,23 @@
 # Switchboard Host Bridge
 
+## Setting up on a new Mac
+
+```sh
+git clone https://github.com/mknudsen404-QA/codex-micro-switchboard.git
+cd codex-micro-switchboard/host
+./setup.sh
+```
+
+`setup.sh` is idempotent — safe to re-run any time (e.g. after a fresh `git
+pull`). It creates the venv, installs the voice-hold dependency, creates
+`agents.json` from the template (pointed at wherever you actually cloned the
+repo — it doesn't assume any particular path), installs the Claude
+Code/Codex lifecycle hooks, and installs the bridge as a login LaunchAgent.
+The first time you use push-to-talk on that Mac, grant the Accessibility
+permission prompt, then restart the bridge (`launchctl unload` +
+`launchctl load` the plist, or just re-run `setup.sh`) since a process
+doesn't pick up a newly-granted permission without restarting.
+
 This is the first Mac-side bridge for Switchboard.
 
 It now has two jobs:
