@@ -389,6 +389,23 @@ def registry_slot_summary(registry: dict, slot: int | str | None) -> str:
     )
 
 
+def _set_status(record: dict, status: str) -> None:
+    """Apply a status transition, tracking busy_since (turn-scoped ramp).
+
+    Every status assignment goes through this instead of writing
+    record["status"] directly, so busy_since starts the moment a slot
+    becomes busy and is cleared the moment it stops being busy.
+    """
+    was_busy = record.get("status") in BUSY_STATUSES
+    record["status"] = status
+    record["last_updated_at"] = _now()
+    now_busy = status in BUSY_STATUSES
+    if now_busy and not was_busy:
+        record["busy_since"] = _now()
+    elif not now_busy:
+        record.pop("busy_since", None)
+
+
 def update_registry_slot_status(
     registry_path: Path,
     slot: int,
@@ -402,7 +419,7 @@ def update_registry_slot_status(
         if not record:
             return None
         if status is not None:
-            record["status"] = status
+            _set_status(record, status)
         if effort is not None:
             record["effort"] = effort
         if activity is not None:
@@ -413,11 +430,11 @@ def update_registry_slot_status(
 
 def agent_update_event(record: dict) -> dict:
     status = record.get("status", "empty")
-    busy_seconds = 0
+    busy_elapsed_ms = 0
     if status in BUSY_STATUSES:
-        last_updated = record.get("last_updated_at")
-        if last_updated:
-            busy_seconds = max(0, _now() - int(last_updated))
+        busy_since = record.get("busy_since")
+        if busy_since:
+            busy_elapsed_ms = max(0, round((_clock.now() - int(busy_since)) * 1000))
     return {
         "event": "agent.update",
         "slot": record.get("slot"),
@@ -426,7 +443,7 @@ def agent_update_event(record: dict) -> dict:
         "status": status,
         "effort": record.get("effort", "medium"),
         "activity": record.get("activity", ""),
-        "busy_seconds": busy_seconds,
+        "busy_elapsed_ms": busy_elapsed_ms,
     }
 
 
@@ -715,16 +732,6 @@ def poll_slot_logs(state: BridgeState, stop_event: threading.Event, interval: fl
             for slot_key in changed_slots + freed_slots:
                 write_slot_update(state.device_fd, registry, slot_key)
 
-        # Re-push busy slots even when status itself hasn't changed, purely
-        # so busy_seconds keeps climbing on the device — that's what lets the
-        # LED escalate (e.g. start pulsing) the longer a turn runs, not just
-        # react to status transitions.
-        registry = load_registry(state.registry_path)
-        already_pushed = set(changed_slots) | set(freed_slots)
-        for slot_key, record in registry.get("slots", {}).items():
-            if slot_key not in already_pushed and record.get("status") in BUSY_STATUSES:
-                write_slot_update(state.device_fd, registry, slot_key)
-
 
 HOOK_HOST = "127.0.0.1"
 HOOK_PORT = 8877
@@ -801,16 +808,18 @@ def _codex_hook_command(event: str) -> str:
     return _hook_command(event) + "; printf '{}'"
 
 
-def _extract_agent_id(body: bytes) -> str | None:
+def _parse_body(body: bytes) -> dict:
     if not body:
-        return None
+        return {}
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    agent_id = payload.get("agent_id")
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _extract_agent_id(body: bytes) -> str | None:
+    agent_id = _parse_body(body).get("agent_id")
     return str(agent_id) if agent_id else None
 
 
@@ -841,6 +850,21 @@ class _HookRequestHandler(http.server.BaseHTTPRequestHandler):
 
     @staticmethod
     def _apply_hook_event(registry: dict, slot_key: str, record: dict, event: str, body: bytes) -> bool:
+        # Guard against a second session (e.g. a relaunch that reused
+        # SWITCHBOARD_SLOT before the old one's SessionEnd freed it) sending
+        # hooks that would otherwise corrupt this slot's state. The slot's
+        # owner is whichever session_id first claims it via SessionStart;
+        # hooks from any other session_id are dropped rather than applied.
+        payload = _parse_body(body)
+        incoming = payload.get("session_id")
+        owner = record.get("session_id")
+        if event == "SessionStart" and incoming:
+            if owner and owner != incoming:
+                return False  # a second session claims an owned slot: ignore it
+            record["session_id"] = incoming
+        elif incoming and owner and incoming != owner:
+            return False  # stale/foreign session: ignore
+
         # A subagent (Task-tool run) can be dispatched to run in the
         # background and keep going after the main turn's Stop event fires —
         # Stop only means "the main turn is done", not "this slot is idle".
@@ -861,8 +885,7 @@ class _HookRequestHandler(http.server.BaseHTTPRequestHandler):
                 active.add(agent_id)
                 record["active_subagents"] = sorted(active)
                 if record.get("status") not in BUSY_STATUSES:
-                    record["status"] = "working"
-                    record["last_updated_at"] = _now()
+                    _set_status(record, "working")
                 return True
             # SubagentStop
             if agent_id not in active:
@@ -874,8 +897,7 @@ class _HookRequestHandler(http.server.BaseHTTPRequestHandler):
                 # The main turn already finished (Stop already fired) and
                 # this was the last subagent still outstanding — deliver the
                 # deferred "done" now.
-                record["status"] = "done"
-                record["last_updated_at"] = _now()
+                _set_status(record, "done")
             return dirty
 
         status = _hook_status_for(record.get("family", ""), event)
@@ -894,14 +916,22 @@ class _HookRequestHandler(http.server.BaseHTTPRequestHandler):
             # deliver a stale "done" for a slot that's busy again.
             dirty = True
         if status == record.get("status"):
+            if event == "UserPromptSubmit":
+                # New turn: reset the ramp even if the slot was already busy
+                # (e.g. a prompt sent mid-turn), since busy_elapsed_ms
+                # measures the current turn, not cumulative busy time. This
+                # must happen even when status doesn't change (busy -> busy).
+                record["busy_since"] = _now()
+                dirty = True
             return dirty
         if status == "done" and record.get("active_subagents"):
             # Defer: a subagent this turn dispatched is still running.
             # SubagentStop will deliver "done" once the last one finishes.
             record["main_stopped"] = True
             return True
-        record["status"] = status
-        record["last_updated_at"] = _now()
+        _set_status(record, status)
+        if event == "UserPromptSubmit":
+            record["busy_since"] = _now()
         record.pop("main_stopped", None)
         return True
 
