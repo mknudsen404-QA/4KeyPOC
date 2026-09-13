@@ -137,6 +137,14 @@ def bridge_harness(tmp_path, fake_clock):
         target=bridge.run, kwargs=dict(liveness_interval=0.05, hook_port=port), daemon=True
     )
     thread.start()
+    # Let the reader/ticker threads and the hook HTTP server actually start
+    # running before the test presses keys or POSTs hooks. On a cold CI
+    # runner (observed on GitHub Actions, never locally) the first couple
+    # of these fixtures in a pytest session can take noticeably longer
+    # than usual to get their background threads scheduled; without this,
+    # the very first `press()` in the test can land before anything is
+    # listening and its "launched" line never arrives.
+    time.sleep(0.5)
 
     yield {
         "master": master,
