@@ -16,6 +16,7 @@ slash commands, or send text into an agent yet.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fcntl
 import glob
 import http.server
@@ -114,6 +115,18 @@ for _rate_name, _rate_value in (
         BAUD_RATES[_rate_name] = getattr(termios, _rate_value)
 
 
+class _SystemClock:
+    def now(self) -> float:
+        return time.time()
+
+
+_clock = _SystemClock()
+
+
+def _now() -> int:
+    return int(_clock.now())
+
+
 @dataclass
 class BridgeState:
     selected_slot: int | None = None
@@ -146,9 +159,34 @@ def load_registry(path: Path = DEFAULT_REGISTRY) -> dict:
 
 def save_registry(registry: dict, path: Path = DEFAULT_REGISTRY) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    tmp = path.with_name(path.name + f".{os.getpid()}.{threading.get_ident()}.tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
         json.dump(registry, handle, indent=2, sort_keys=True)
         handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
+_REGISTRY_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
+def registry_transaction(path: Path = DEFAULT_REGISTRY):
+    """Exclusive load->mutate->save. Holds the in-process lock and an
+    fcntl.flock on <path>.lock so the `status`/`clear`/`config` CLI (separate
+    processes) can't interleave with the running bridge.
+    """
+    lock_path = path.with_name(path.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with _REGISTRY_LOCK, open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            registry = load_registry(path)
+            yield registry
+            save_registry(registry, path)
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
 def normalize_effort(effort: str | None) -> str:
@@ -198,7 +236,7 @@ def slot_record(
         "status": "launched",
         "effort": normalize_effort(effort),
         "activity": "terminal launched",
-        "last_launched_at": int(time.time()),
+        "last_launched_at": _now(),
     }
 
 
@@ -359,19 +397,18 @@ def update_registry_slot_status(
     effort: str | None = None,
     activity: str | None = None,
 ) -> dict | None:
-    registry = load_registry(registry_path)
-    record = registry.get("slots", {}).get(str(slot))
-    if not record:
-        return None
-    if status is not None:
-        record["status"] = status
-    if effort is not None:
-        record["effort"] = effort
-    if activity is not None:
-        record["activity"] = activity
-    record["last_updated_at"] = int(time.time())
-    save_registry(registry, registry_path)
-    return record
+    with registry_transaction(registry_path) as registry:
+        record = registry.get("slots", {}).get(str(slot))
+        if not record:
+            return None
+        if status is not None:
+            record["status"] = status
+        if effort is not None:
+            record["effort"] = effort
+        if activity is not None:
+            record["activity"] = activity
+        record["last_updated_at"] = _now()
+        return record
 
 
 def agent_update_event(record: dict) -> dict:
@@ -380,7 +417,7 @@ def agent_update_event(record: dict) -> dict:
     if status in BUSY_STATUSES:
         last_updated = record.get("last_updated_at")
         if last_updated:
-            busy_seconds = max(0, int(time.time()) - int(last_updated))
+            busy_seconds = max(0, _now() - int(last_updated))
     return {
         "event": "agent.update",
         "slot": record.get("slot"),
@@ -444,8 +481,9 @@ def describe_event(event: dict, state: BridgeState) -> str:
                 # The Terminal window/tab was closed by hand since launch.
                 # Treat the slot as empty again so re-pressing its key can
                 # relaunch a fresh session instead of describing a ghost.
-                registry.get("slots", {}).pop(slot_key, None)
-                save_registry(registry, state.registry_path)
+                with registry_transaction(state.registry_path) as txn_registry:
+                    txn_registry.get("slots", {}).pop(slot_key, None)
+                registry = load_registry(state.registry_path)
             if not registry.get("slots", {}).get(slot_key) and state.auto_launch:
                 message = launch_slot_from_config(
                     slot=state.selected_slot,
@@ -653,27 +691,27 @@ def poll_slot_logs(state: BridgeState, stop_event: threading.Event, interval: fl
     never holds the file open across a sleep.
     """
     while not stop_event.wait(interval):
-        registry = load_registry(state.registry_path)
-        slots = registry.get("slots", {})
         changed_slots: list[str] = []
         freed_slots: list[str] = []
-        for slot_key, record in list(slots.items()):
-            tty_name = record.get("terminal_tty")
-            if tty_name and not find_terminal_tab(tty_name):
-                freed_slots.append(slot_key)
-                continue
-            log_path = record.get("terminal_log")
-            if not log_path or not Path(log_path).exists():
-                continue
-            detected = classify_activity(read_log_tail(log_path))
-            if detected and detected != record.get("status"):
-                record["status"] = detected
-                record["last_updated_at"] = int(time.time())
-                changed_slots.append(slot_key)
-        for slot_key in freed_slots:
-            slots.pop(slot_key, None)
+        with registry_transaction(state.registry_path) as registry:
+            slots = registry.get("slots", {})
+            for slot_key, record in list(slots.items()):
+                tty_name = record.get("terminal_tty")
+                if tty_name and not find_terminal_tab(tty_name):
+                    freed_slots.append(slot_key)
+                    continue
+                log_path = record.get("terminal_log")
+                if not log_path or not Path(log_path).exists():
+                    continue
+                detected = classify_activity(read_log_tail(log_path))
+                if detected and detected != record.get("status"):
+                    record["status"] = detected
+                    record["last_updated_at"] = _now()
+                    changed_slots.append(slot_key)
+            for slot_key in freed_slots:
+                slots.pop(slot_key, None)
         if changed_slots or freed_slots:
-            save_registry(registry, state.registry_path)
+            registry = load_registry(state.registry_path)
             for slot_key in changed_slots + freed_slots:
                 write_slot_update(state.device_fd, registry, slot_key)
 
@@ -681,8 +719,9 @@ def poll_slot_logs(state: BridgeState, stop_event: threading.Event, interval: fl
         # so busy_seconds keeps climbing on the device — that's what lets the
         # LED escalate (e.g. start pulsing) the longer a turn runs, not just
         # react to status transitions.
+        registry = load_registry(state.registry_path)
         already_pushed = set(changed_slots) | set(freed_slots)
-        for slot_key, record in slots.items():
+        for slot_key, record in registry.get("slots", {}).items():
             if slot_key not in already_pushed and record.get("status") in BUSY_STATUSES:
                 write_slot_update(state.device_fd, registry, slot_key)
 
@@ -787,13 +826,14 @@ class _HookRequestHandler(http.server.BaseHTTPRequestHandler):
         event = self.path.rsplit("/", 1)[-1]
         slot_key = (self.headers.get("X-Switchboard-Slot") or "").strip()
         if slot_key:
-            registry = load_registry(self.state.registry_path)
-            record = registry.get("slots", {}).get(slot_key)
-            if record:
-                dirty = self._apply_hook_event(registry, slot_key, record, event, body)
-                if dirty:
-                    save_registry(registry, self.state.registry_path)
-                    write_slot_update(self.state.device_fd, registry, slot_key)
+            push_update = False
+            with registry_transaction(self.state.registry_path) as registry:
+                record = registry.get("slots", {}).get(slot_key)
+                if record:
+                    push_update = self._apply_hook_event(registry, slot_key, record, event, body)
+            if push_update:
+                registry = load_registry(self.state.registry_path)
+                write_slot_update(self.state.device_fd, registry, slot_key)
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -822,7 +862,7 @@ class _HookRequestHandler(http.server.BaseHTTPRequestHandler):
                 record["active_subagents"] = sorted(active)
                 if record.get("status") not in BUSY_STATUSES:
                     record["status"] = "working"
-                    record["last_updated_at"] = int(time.time())
+                    record["last_updated_at"] = _now()
                 return True
             # SubagentStop
             if agent_id not in active:
@@ -835,7 +875,7 @@ class _HookRequestHandler(http.server.BaseHTTPRequestHandler):
                 # this was the last subagent still outstanding — deliver the
                 # deferred "done" now.
                 record["status"] = "done"
-                record["last_updated_at"] = int(time.time())
+                record["last_updated_at"] = _now()
             return dirty
 
         status = _hook_status_for(record.get("family", ""), event)
@@ -861,7 +901,7 @@ class _HookRequestHandler(http.server.BaseHTTPRequestHandler):
             record["main_stopped"] = True
             return True
         record["status"] = status
-        record["last_updated_at"] = int(time.time())
+        record["last_updated_at"] = _now()
         record.pop("main_stopped", None)
         return True
 
@@ -1281,18 +1321,18 @@ def launch_agent(args: argparse.Namespace) -> int:
         return 0
 
     if args.no_open:
+        with registry_transaction(args.registry) as registry:
+            set_registry_slot(registry, record)
         registry = load_registry(args.registry)
-        set_registry_slot(registry, record)
-        save_registry(registry, args.registry)
         if not getattr(args, "quiet", False):
             print(f"Registered {registry_slot_summary(registry, slot)}")
             print("Terminal launch skipped.")
         return 0
 
     record["terminal_tty"] = open_terminal(shell_command)
+    with registry_transaction(args.registry) as registry:
+        set_registry_slot(registry, record)
     registry = load_registry(args.registry)
-    set_registry_slot(registry, record)
-    save_registry(registry, args.registry)
     if not getattr(args, "quiet", False):
         print(f"Launched and registered {registry_slot_summary(registry, slot)}")
     return 0
@@ -1350,9 +1390,8 @@ def set_status(args: argparse.Namespace) -> int:
 
 
 def clear_slot(args: argparse.Namespace) -> int:
-    registry = load_registry(args.registry)
-    removed = registry.get("slots", {}).pop(str(args.slot), None)
-    save_registry(registry, args.registry)
+    with registry_transaction(args.registry) as registry:
+        removed = registry.get("slots", {}).pop(str(args.slot), None)
     if removed:
         print(f"Cleared Agent {args.slot}")
     else:
@@ -1559,7 +1598,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     listen_parser = subcommands.add_parser("listen", help="Listen to board events")
     listen_parser.set_defaults(func=listen)
-    listen_parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    listen_parser.add_argument("--registry", type=Path, default=argparse.SUPPRESS)
     listen_parser.add_argument("--port", help="Serial port, for example /dev/cu.usbmodem2301")
     listen_parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate")
     listen_parser.add_argument("--duration", type=float, help="Stop listening after this many seconds")
@@ -1574,7 +1613,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     launch_parser = subcommands.add_parser("launch", help="Launch/register one agent slot")
     launch_parser.set_defaults(func=launch_agent)
-    launch_parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    launch_parser.add_argument("--registry", type=Path, default=argparse.SUPPRESS)
     launch_parser.add_argument("--slot", type=int, required=True)
     launch_parser.add_argument("--name", required=True)
     launch_parser.add_argument(
@@ -1590,7 +1629,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     launch_all_parser = subcommands.add_parser("launch-all", help="Launch/register agents from a config file")
     launch_all_parser.set_defaults(func=launch_all)
-    launch_all_parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    launch_all_parser.add_argument("--registry", type=Path, default=argparse.SUPPRESS)
     launch_all_parser.add_argument("--config", default=str(HOST_DIR / "agents.example.json"))
     launch_all_parser.add_argument("--command", default="codex")
     launch_all_parser.add_argument("--dry-run", action="store_true")
@@ -1598,11 +1637,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     slots_parser = subcommands.add_parser("slots", help="Show registered agent slots")
     slots_parser.set_defaults(func=list_slots)
-    slots_parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    slots_parser.add_argument("--registry", type=Path, default=argparse.SUPPRESS)
 
     status_parser = subcommands.add_parser("status", help="Update one registered agent slot")
     status_parser.set_defaults(func=set_status)
-    status_parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    status_parser.add_argument("--registry", type=Path, default=argparse.SUPPRESS)
     status_parser.add_argument("--slot", type=int, required=True)
     status_parser.add_argument("--status", choices=STATUS_CHOICES)
     status_parser.add_argument("--effort")
@@ -1610,7 +1649,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     clear_parser = subcommands.add_parser("clear", help="Clear one registered agent slot")
     clear_parser.set_defaults(func=clear_slot)
-    clear_parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    clear_parser.add_argument("--registry", type=Path, default=argparse.SUPPRESS)
     clear_parser.add_argument("--slot", type=int, required=True)
 
     hooks_parser = subcommands.add_parser(
@@ -1623,14 +1662,14 @@ def build_parser() -> argparse.ArgumentParser:
         "test-trigger", help="Type text into a shell-family test slot's terminal (no API cost)"
     )
     trigger_parser.set_defaults(func=test_trigger)
-    trigger_parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    trigger_parser.add_argument("--registry", type=Path, default=argparse.SUPPRESS)
     trigger_parser.add_argument("--slot", type=int, required=True)
     trigger_parser.add_argument("text")
     trigger_parser.add_argument("--force", action="store_true", help="Allow injecting into a non-shell (real agent) slot")
 
     sync_parser = subcommands.add_parser("sync", help="Send registered slot status to the board")
     sync_parser.set_defaults(func=sync_device)
-    sync_parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    sync_parser.add_argument("--registry", type=Path, default=argparse.SUPPRESS)
     sync_parser.add_argument("--port", help="Serial port, for example /dev/cu.usbmodem2301")
     sync_parser.add_argument("--baud", type=int, default=115200)
     sync_parser.add_argument("slot_pos", nargs="?", type=int, help="Optional slot number to sync")

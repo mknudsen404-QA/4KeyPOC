@@ -12,10 +12,13 @@ components/
 host/.venv/
 host/__pycache__/
 host/logs/
+host/tests/__pycache__/
+.pytest_cache/
 
 # Personal/local bridge state — agents.example.json is the checked-in
 # template; agent_registry.json and agents.json are generated/personal.
 host/agent_registry.json
+host/agent_registry.json.lock
 host/agents.json
 
 .DS_Store
