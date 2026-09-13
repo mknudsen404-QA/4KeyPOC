@@ -1,0 +1,4 @@
+{"activity": "press to launch", "busy_elapsed_ms": 0, "effort": "medium", "event": "agent.update", "family": "slot", "name": "Agent 1", "slot": 1, "status": "empty"}
+{"activity": "press to launch", "busy_elapsed_ms": 0, "effort": "medium", "event": "agent.update", "family": "slot", "name": "Agent 2", "slot": 2, "status": "empty"}
+{"activity": "press to launch", "busy_elapsed_ms": 0, "effort": "medium", "event": "agent.update", "family": "slot", "name": "Agent 3", "slot": 3, "status": "empty"}
+{"activity": "press to launch", "busy_elapsed_ms": 0, "effort": "medium", "event": "agent.update", "family": "slot", "name": "Agent 4", "slot": 4, "status": "empty"}

@@ -1,0 +1,3 @@
+{"t": 0, "board": {"event": "agent.select", "slot": 1}}
+{"t": 1, "liveness": {"1": "unknown"}}
+{"t": 2, "board": {"event": "agent.select", "slot": 1}}

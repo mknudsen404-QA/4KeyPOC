@@ -1,0 +1,4 @@
+{"t": 0, "board": {"event": "agent.select", "slot": 1}}
+{"t": 1, "hook": {"slot": 1, "event": "SessionStart", "body": {"session_id": "s-1"}}}
+{"t": 2, "hook": {"slot": 1, "event": "UserPromptSubmit", "body": {"session_id": "s-1"}}}
+{"t": 20, "board": {"event": "agent.reasoning.apply", "slot": 1, "effort": "high"}}

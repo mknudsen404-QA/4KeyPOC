@@ -1,0 +1,2 @@
+{"registry": {"version": 1, "slots": {"1": {"slot": 1, "name": "Agent 1", "family": "claude", "status": "idle", "session_id": "s-real"}}}}
+{"t": 0, "hook": {"slot": 1, "event": "UserPromptSubmit", "body": {"session_id": "s-fake"}}}

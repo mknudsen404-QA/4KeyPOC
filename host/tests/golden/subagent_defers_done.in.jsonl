@@ -1,0 +1,4 @@
+{"registry": {"version": 1, "slots": {"1": {"slot": 1, "name": "Agent 1", "family": "claude", "status": "working"}}}}
+{"t": 0, "hook": {"slot": 1, "event": "SubagentStart", "body": {"agent_id": "ag-1"}}}
+{"t": 5, "hook": {"slot": 1, "event": "Stop", "body": {}}}
+{"t": 6, "hook": {"slot": 1, "event": "SubagentStop", "body": {"agent_id": "ag-1"}}}

@@ -1,0 +1,3 @@
+{"registry": {"version": 1, "slots": {"1": {"slot": 1, "name": "Agent 1", "family": "shell", "status": "idle", "terminal_tty": "/dev/ttysDEAD"}}}}
+{"t": 0, "liveness": {"1": "dead"}}
+{"t": 1, "startup_sync": true}
