@@ -28,24 +28,31 @@ def _warm_up_pty_thread_socket():
     """Absorb a one-time startup cost before any real test's timing budget
     does. Observed only on GitHub Actions' macOS runner (never locally):
     whichever tests happen to be the first few in the session to use
-    `bridge_harness` (pty + background thread + a bound socket) fail with
-    zero device output even though the exact same operations, on the same
-    fixture, succeed reliably for every later test in the same run —
-    confirmed by moving which tests run first and watching the failures
-    move with them. Root cause on CI specifically (likely a first-use cost
-    somewhere in pty/thread/socket setup under that sandbox) isn't
-    pinned down; paying it once, up front, on a throwaway pty/thread/
-    socket before any assertion's clock starts is what actually fixed it.
+    `bridge_harness` fail with zero device output even though the exact
+    same operations, on the same fixture, succeed reliably for every later
+    test in the same run — confirmed by moving which tests run first and
+    watching the failures move with them. A generic pty+thread+bound-socket
+    warm-up did NOT fix it (tried first); this one specifically also
+    constructs and tears down a real http.server.ThreadingHTTPServer, since
+    that (not a bare socket) is the one thing every `bridge_harness` use
+    does that a plain TCP bind doesn't — a real Bridge.run() also
+    constructs one via start_hook_server() before its worker loop starts
+    dequeuing anything, so if *that* has a one-time slow path (some
+    network/security check specific to a listening HTTP server on this
+    sandbox), it would stall every submitted event until it clears.
     """
+    from switchboard.hooks_server import start_hook_server
+
     master, slave = os.openpty()
     tty.setraw(slave)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    sock.close()
     warmup_thread = threading.Thread(target=lambda: None)
     warmup_thread.start()
     warmup_thread.join()
+    server = start_hook_server(lambda event: None, "127.0.0.1", 0)
     time.sleep(1.0)
+    if server is not None:
+        server.shutdown()
+        server.server_close()
     os.close(master)
     os.close(slave)
     yield
