@@ -16,6 +16,7 @@ slash commands, or send text into an agent yet.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import glob
 import http.server
 import json
@@ -291,6 +292,23 @@ def configure_serial(fd: int, baud: int) -> None:
 
 def open_serial(port: str, baud: int) -> int:
     fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    try:
+        # Exclusive access: without this, a second process (a stray `cat`,
+        # another bridge instance, a leftover diagnostic session) can open
+        # the same tty at the same time with no error from either side —
+        # the OS just splits incoming bytes unpredictably between readers.
+        # That happened for real: a diagnostic `cat` outlived its intended
+        # lifetime and silently starved the bridge of every board event for
+        # a good chunk of a debugging session before anyone noticed. Fail
+        # loudly instead.
+        fcntl.ioctl(fd, termios.TIOCEXCL)
+    except OSError as exc:
+        os.close(fd)
+        raise RuntimeError(
+            f"{port} is already open by another process (found while claiming exclusive "
+            f"access). Close whatever else has it — `lsof {port}` will show you what — "
+            "before starting the bridge."
+        ) from exc
     configure_serial(fd, baud)
     return fd
 
