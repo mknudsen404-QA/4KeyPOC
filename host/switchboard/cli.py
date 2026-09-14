@@ -199,7 +199,7 @@ def _make_bridge(args: argparse.Namespace, device):
         registry=Registry(args.registry),
         device=device,
         terminal=terminal,
-        prober=ProcessProber(),
+        prober=ProcessProber(log=print),
         clock=SystemClock(),
         launch_config=load_agents_config(args.launch_config),
         auto_launch=args.auto_launch,
