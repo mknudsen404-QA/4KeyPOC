@@ -43,19 +43,47 @@ def test_claude_event_table(event, expected_status):
         assert slots["1"]["status"] == expected_status
 
 
-def test_notification_hook_logs_raw_message():
-    """Diagnostic-only for now (see SWITCHBOARD_DESIGN.md's "Notification-
-    text matching" known limitation): every Notification maps to
-    needs_input regardless of what it actually says, so the raw message
-    is logged for future calibration against real (not just "needs your
-    permission") Claude Code notifications."""
+def test_notification_permission_prompt_is_needs_input():
+    record = make_record(family="claude", status="working")
+    slots = {"1": record}
+    slots, effects = do_hook(
+        slots, "Notification",
+        hook_body(notification_type="permission_prompt", message="Claude needs your permission"),
+    )
+    assert slots["1"]["status"] == "needs_input"
+    logs = [e for e in effects if isinstance(e, Log)]
+    assert any("permission_prompt" in l.message and "needs your permission" in l.message for l in logs)
+
+
+def test_notification_idle_prompt_does_not_change_status():
+    """The ~60s-after-a-turn "Claude is waiting for your input" nudge must
+    not flip a finished slot from done/green to needs_input/yellow."""
+    record = make_record(family="claude", status="done")
+    slots = {"1": record}
+    slots, effects = do_hook(
+        slots, "Notification",
+        hook_body(notification_type="idle_prompt", message="Claude is waiting for your input"),
+    )
+    assert slots["1"]["status"] == "done"
+    assert not [e for e in effects if isinstance(e, SendUpdate)]
+    logs = [e for e in effects if isinstance(e, Log)]
+    assert len(logs) == 1 and "idle_prompt" in logs[0].message
+
+
+@pytest.mark.parametrize("kind", ["auth_success", "something_new"])
+def test_notification_non_blocking_types_are_ignored(kind):
+    record = make_record(family="claude", status="done")
+    slots = {"1": record}
+    slots, _ = do_hook(slots, "Notification", hook_body(notification_type=kind))
+    assert slots["1"]["status"] == "done"
+
+
+def test_notification_without_type_keeps_legacy_needs_input():
+    """Older Claude Code payloads without notification_type: unchanged."""
     record = make_record(family="claude", status="idle")
     slots = {"1": record}
-    slots, effects = do_hook(slots, "Notification", hook_body(message="Claude is waiting for your input"))
-    logs = [e for e in effects if isinstance(e, Log)]
-    assert len(logs) == 1
-    assert "Claude is waiting for your input" in logs[0].message
-    assert slots["1"]["status"] == "needs_input"  # behavior unchanged for now
+    slots, _ = do_hook(slots, "Notification", hook_body(message="Claude needs your permission"))
+    assert slots["1"]["status"] == "needs_input"
 
 
 @pytest.mark.parametrize("event,expected_status", model.CODEX_HOOK_STATUS.items())

@@ -52,17 +52,27 @@ STATUSES: tuple[StatusDef, ...] = (
 CLAUDE_SESSION_END_STATUS = "empty"
 CODEX_SESSION_END_STATUS = "empty"
 
+# Claude Code's Notification hook fires for several `notification_type`s;
+# only the ones where Claude is actually blocked on the user mean
+# needs_input. `idle_prompt` ("Claude is waiting for your input", ~60s
+# after a turn ends) and `auth_success` are not — the slot must stay
+# "done"/green after a turn, not flip to yellow a minute later. This tuple
+# drives both the hook matcher below (so the other types never leave Claude
+# Code) and the reducer's guard (for installs whose hooks predate the
+# matcher).
+NEEDS_INPUT_NOTIFICATION_TYPES: tuple[str, ...] = ("permission_prompt", "elicitation_dialog")
+
 # Which hooks Claude Code fires for, and the matcher restricting when (None
 # = every invocation of that hook). PreToolUse only fires for
-# AskUserQuestion; SubagentStart/SubagentStop aren't status-producing hooks
-# (the reducer's active_subagents gating handles them directly) but still
-# need registering.
+# AskUserQuestion; Notification only for the blocking notification types;
+# SubagentStart/SubagentStop aren't status-producing hooks (the reducer's
+# active_subagents gating handles them directly) but still need registering.
 HOOK_MATCHERS: dict[str, str | None] = {
     "SessionStart": None,
     "UserPromptSubmit": None,
     "PreToolUse": "AskUserQuestion",
     "PostToolUse": None,
-    "Notification": None,
+    "Notification": "|".join(NEEDS_INPUT_NOTIFICATION_TYPES),
     "Stop": None,
     "SessionEnd": None,
     "SubagentStart": None,

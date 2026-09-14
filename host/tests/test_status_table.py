@@ -40,3 +40,13 @@ def test_codex_hook_status_matches_status_defs():
 def test_pascal_case_naming():
     assert status_table._pascal_case("needs_input") == "NeedsInput"
     assert status_table._pascal_case("done") == "Done"
+
+
+def test_notification_matcher_is_derived_from_needs_input_types():
+    """The hook matcher and the reducer guard must never drift apart:
+    both come from NEEDS_INPUT_NOTIFICATION_TYPES."""
+    from switchboard.status_table import HOOK_MATCHERS, NEEDS_INPUT_NOTIFICATION_TYPES
+
+    assert HOOK_MATCHERS["Notification"] == "|".join(NEEDS_INPUT_NOTIFICATION_TYPES)
+    assert "permission_prompt" in NEEDS_INPUT_NOTIFICATION_TYPES
+    assert "idle_prompt" not in NEEDS_INPUT_NOTIFICATION_TYPES
