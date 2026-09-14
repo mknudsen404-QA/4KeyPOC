@@ -21,6 +21,17 @@ from switchboard.reducer import CloseTab, Effect, Focus, Launch, Log, ReducerSta
 from switchboard.registry import Registry
 from switchboard.terminal import TerminalDriver
 
+def _default_log(message: str) -> None:
+    # Plain `print` alone isn't enough here: when stdout is redirected to a
+    # plain file (as the LaunchAgent does, for bridge.out.log — not a tty),
+    # CPython fully block-buffers it, so log lines can sit invisible in
+    # memory for arbitrarily long instead of reaching the log file when
+    # they're printed. Confirmed live: a liveness-probe diagnostic line
+    # never appeared on disk minutes after it must have run. flush=True
+    # makes every log line land immediately regardless of buffering mode.
+    print(message, flush=True)
+
+
 # macOS virtual keycode for the spacebar (used to drive Claude Code's /voice
 # hold-to-record mode).
 SPACE_KEYCODE = 49
@@ -45,7 +56,7 @@ class Bridge:
         dry_run: bool,
         no_open: bool,
         close_dead_tabs: bool = False,
-        log: Callable[[str], None] = print,
+        log: Callable[[str], None] = _default_log,
     ) -> None:
         self.registry = registry
         self.device = device

@@ -222,3 +222,16 @@ def test_close_dead_tabs_leaves_terminal_when_disabled(tmp_path):
 
     assert terminal.closed == []
     assert "1" not in registry.load()["slots"]  # still freed either way
+
+
+def test_default_log_flushes(monkeypatch):
+    """Bridge's default logger must flush every line — `listen` runs
+    indefinitely with stdout redirected to a plain file under the
+    LaunchAgent, which CPython fully block-buffers by default, so a bare
+    `print()` can leave log lines invisible on disk indefinitely."""
+    from switchboard.bridge import _default_log
+
+    calls = []
+    monkeypatch.setattr("builtins.print", lambda *a, **k: calls.append(k.get("flush")))
+    _default_log("hello")
+    assert calls == [True]

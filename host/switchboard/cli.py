@@ -192,14 +192,20 @@ def clear_slot(args: argparse.Namespace) -> int:
 
 
 def _make_bridge(args: argparse.Namespace, device):
-    from switchboard.bridge import Bridge
+    from switchboard.bridge import Bridge, _default_log
 
     terminal = NullTerminal() if (args.no_open or args.dry_run) else _terminal
     return Bridge(
         registry=Registry(args.registry),
         device=device,
         terminal=terminal,
-        prober=ProcessProber(log=print),
+        # flush=True: `listen` runs indefinitely with stdout redirected to
+        # a plain file under the LaunchAgent (bridge.out.log, not a tty),
+        # which CPython fully block-buffers by default — bare `print`
+        # alone can leave diagnostic lines invisible on disk for
+        # arbitrarily long. Bridge's own default logger already does this;
+        # ProcessProber's is wired separately since it's constructed here.
+        prober=ProcessProber(log=_default_log),
         clock=SystemClock(),
         launch_config=load_agents_config(args.launch_config),
         auto_launch=args.auto_launch,
