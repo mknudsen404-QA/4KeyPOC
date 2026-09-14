@@ -19,6 +19,33 @@ slot is currently selected.
   breadboard — an unsoldered/poorly-seated connection here reads as "no I2C
   device found" and is easy to mistake for a wiring or code problem.
 
+## What you should see on the serial port at boot
+
+Right after `Serial.begin()` (before the seesaw is touched):
+
+```json
+{"event":"boot","stage":"start","firmware":"neokey","build":"<compile date/time>"}
+```
+
+If the seesaw doesn't answer, one `error` line follows per retry (~1/s,
+retried forever — the board is useless without it):
+
+```json
+{"event":"error","reason":"seesaw_no_response","attempt":1}
+```
+
+Once init succeeds and the startup LED sweep finishes:
+
+```json
+{"event":"boot","stage":"ready","firmware":"neokey","attempts":0}
+```
+
+A board stuck repeating `error` lines has a hung seesaw chip (see the quirk
+below) — power-cycle it (unplug, wait 5s, replug). A board that never
+prints anything at all, ever, on any key press or replug, is very likely
+running the wrong firmware — see
+`docs/design/wrong-firmware-recovery-plan.md`.
+
 ## Libraries (install via Arduino IDE Library Manager, or `arduino-cli lib install`)
 
 - `Adafruit_seesaw_Library` (provides `Adafruit_NeoKey_1x4`)

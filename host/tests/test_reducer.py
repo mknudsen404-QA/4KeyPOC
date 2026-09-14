@@ -291,6 +291,9 @@ def test_reduce_never_performs_io(monkeypatch):
         BoardEvent("voice.hold.stop", {"slot": 1}),
         BoardEvent("agent.update.ack", {"slot": 1}),
         BoardEvent("agent.focus", {"slot": 1}),
+        BoardEvent("boot", {"stage": "start", "firmware": "neokey", "build": "Sep 14 2026 00:00:00"}),
+        BoardEvent("boot", {"stage": "ready", "firmware": "neokey", "attempts": 0}),
+        BoardEvent("error", {"reason": "seesaw_no_response", "attempt": 1}),
         BoardEvent("plan.approve", {}),
         BoardEvent("review.request", {}),
         BoardEvent("slash.run", {"command": "/foo"}),
@@ -305,6 +308,61 @@ def test_reduce_never_performs_io(monkeypatch):
         slots, effects = reduce(slots, state, event, NOW, auto_launch=True)
         for effect in effects:
             assert isinstance(effect, Effect)
+
+
+# ---- New: firmware boot/error diagnostics --------------------------------
+
+
+def test_boot_event_logs_stage_firmware_and_build():
+    slots = {}
+    state = ReducerState()
+    slots, effects = reduce(
+        slots,
+        state,
+        BoardEvent("boot", {"stage": "start", "firmware": "neokey", "build": "Sep 14 2026 00:00:00"}),
+        NOW,
+        auto_launch=False,
+    )
+    assert effects == [Log("Board boot: start firmware=neokey build=Sep 14 2026 00:00:00")]
+    assert slots == {}
+
+
+def test_boot_event_does_not_mutate_existing_slots():
+    slots = {"1": make_record(status="idle")}
+    state = ReducerState()
+    slots, _ = reduce(
+        slots,
+        state,
+        BoardEvent("boot", {"stage": "ready", "firmware": "neokey", "attempts": 3}),
+        NOW,
+        auto_launch=False,
+    )
+    assert slots == {"1": make_record(status="idle")}
+
+
+def test_error_event_logs_reason_and_attempt():
+    slots = {}
+    state = ReducerState()
+    slots, effects = reduce(
+        slots, state, BoardEvent("error", {"reason": "seesaw_no_response", "attempt": 4}), NOW, auto_launch=False
+    )
+    assert effects == [Log("Board error: seesaw_no_response (attempt 4) — power-cycle the board")]
+    assert slots == {}
+
+
+def test_boot_event_from_unrecognized_firmware_still_logs():
+    """The spike's boot lines (Phase 4) flow through the same handler; the
+    reducer itself doesn't gate on firmware name — that's doctor's job."""
+    slots = {}
+    state = ReducerState()
+    slots, effects = reduce(
+        slots,
+        state,
+        BoardEvent("boot", {"stage": "ping", "firmware": "msc_cdc_spike", "build": "Sep 14 2026 00:00:00"}),
+        NOW,
+        auto_launch=False,
+    )
+    assert effects == [Log("Board boot: ping firmware=msc_cdc_spike build=Sep 14 2026 00:00:00")]
 
 
 # ---- New: select/liveness interaction -----------------------------------

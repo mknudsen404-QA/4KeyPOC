@@ -5,6 +5,9 @@
 #include "seesaw_neopixel.h"
 #include "led_model.h"
 
+#define FIRMWARE_NAME "neokey"
+#define FIRMWARE_BUILD __DATE__ " " __TIME__
+
 #define NEOKEY_ADDR 0x30
 #define SDA_PIN 9
 #define SCL_PIN 8
@@ -40,6 +43,31 @@ void sendEvent(const char *eventName, int slot) {
   StaticJsonDocument<128> doc;
   doc["event"] = eventName;
   doc["slot"] = slot;
+  serializeJson(doc, Serial);
+  Serial.println();
+}
+
+// Boot/error diagnostics have nothing to do with slots, so they get their
+// own senders rather than overloading slot-keyed sendEvent().
+void sendBootEvent(const char *stage, int attempts) {
+  StaticJsonDocument<192> doc;
+  doc["event"] = "boot";
+  doc["stage"] = stage;
+  doc["firmware"] = FIRMWARE_NAME;
+  if (strcmp(stage, "ready") == 0) {
+    doc["attempts"] = attempts;
+  } else {
+    doc["build"] = FIRMWARE_BUILD;
+  }
+  serializeJson(doc, Serial);
+  Serial.println();
+}
+
+void sendSeesawErrorEvent(int attempt) {
+  StaticJsonDocument<128> doc;
+  doc["event"] = "error";
+  doc["reason"] = "seesaw_no_response";
+  doc["attempt"] = attempt;
   serializeJson(doc, Serial);
   Serial.println();
 }
@@ -87,6 +115,8 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
 
+  sendBootEvent("start", 0);
+
   Wire.begin(SDA_PIN, SCL_PIN);
 
   // NOTE: we deliberately do NOT call neokey.begin() here. That function
@@ -96,10 +126,13 @@ void setup() {
   // though plain reads/writes work fine otherwise. So we replicate begin()'s
   // steps manually, skipping the reset call.
   bool ok = false;
+  int attempt = 0;
   while (!ok) {
     ok = neokey.pixels.Adafruit_seesaw::begin(NEOKEY_ADDR, -1, false) &&
          neokey.Adafruit_seesaw::begin(NEOKEY_ADDR, -1, false);
     if (!ok) {
+      attempt++;
+      sendSeesawErrorEvent(attempt);
       delay(1000);
     }
   }
@@ -125,6 +158,8 @@ void setup() {
     neokey.pixels.show();
     delay(80);
   }
+
+  sendBootEvent("ready", attempt);
 }
 
 uint8_t lastButtons = 0;

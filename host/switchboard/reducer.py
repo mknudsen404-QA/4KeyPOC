@@ -94,6 +94,12 @@ def _reduce_board_event(
         return _handle_select(slots, state, payload, now, auto_launch=auto_launch)
     if name == "agent.update.ack":
         return [Log(f"Board applied update for Agent {payload.get('slot')}")]
+    if name == "boot":
+        return [
+            Log(f"Board boot: {payload.get('stage')} firmware={payload.get('firmware')} build={payload.get('build')}")
+        ]
+    if name == "error":
+        return [Log(f"Board error: {payload.get('reason')} (attempt {payload.get('attempt')}) — power-cycle the board")]
     if name == "agent.focus":
         slot = int(payload.get("slot", state.selected_slot or 0))
         record = slots.get(str(slot)) if slot else None

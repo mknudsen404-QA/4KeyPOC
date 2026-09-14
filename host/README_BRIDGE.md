@@ -479,7 +479,20 @@ Board -> bridge:
 {"event":"voice.hold.start","slot":1}
 {"event":"voice.hold.stop","slot":1}
 {"event":"agent.update.ack","slot":1}
+{"event":"boot","stage":"start","firmware":"neokey","build":"Sep 14 2026 12:00:00"}
+{"event":"error","reason":"seesaw_no_response","attempt":1}
+{"event":"boot","stage":"ready","firmware":"neokey","attempts":0}
 ```
+
+`boot`/`stage":"start"` is sent right after `Serial.begin()`, before the
+seesaw is touched. If the seesaw doesn't answer, `error` lines follow at
+~1/s (the firmware retries forever — it's useless without the seesaw) until
+init succeeds, then `boot`/`stage":"ready"` is sent once the startup LED
+sweep finishes; `attempts` is how many `error` lines preceded it. None of
+these three mutate slot state — the bridge only logs them. See
+`docs/design/wrong-firmware-recovery-plan.md` for why this exists (a hung
+seesaw and the wrong firmware both used to look identical: dark keys, no
+serial output).
 
 `agent.select` now also brings that slot's Terminal window to front if it
 already has a live session (confirmed working) — not just on first launch.
