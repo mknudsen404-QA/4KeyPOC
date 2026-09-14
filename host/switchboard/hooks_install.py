@@ -60,7 +60,13 @@ def _claude_group_is_ours(group: dict) -> bool:
     return any(isinstance(h, dict) and HOOK_MARKER in h.get("command", "") for h in hooks)
 
 
-def install_claude_hooks(settings_path: Path | None = None) -> str:
+def install_claude_hooks(settings_path: Path | None = None, dry_run: bool = False) -> str:
+    """Returns "unchanged"/"changed"/"failed" normally. With dry_run=True,
+    makes no writes and instead returns "installed" (already correct),
+    "missing" (no Switchboard hooks present at all), or "stale marker"
+    (some are present but don't match what we'd install now) — for
+    `doctor`.
+    """
     path = settings_path or (Path.home() / ".claude" / "settings.json")
     settings: dict = {}
     if path.exists():
@@ -71,6 +77,7 @@ def install_claude_hooks(settings_path: Path | None = None) -> str:
             return "failed"
     settings.setdefault("hooks", {})
     changed = False
+    any_ours_present = False
     for event, matcher in CLAUDE_HOOK_EVENTS.items():
         groups = [g for g in settings["hooks"].get(event, []) if isinstance(g, dict)]
         foreign = [g for g in groups if not _claude_group_is_ours(g)]
@@ -78,10 +85,16 @@ def install_claude_hooks(settings_path: Path | None = None) -> str:
         if matcher is not None:
             desired = {"matcher": matcher, **desired}
         existing_ours = [g for g in groups if _claude_group_is_ours(g)]
+        if existing_ours:
+            any_ours_present = True
         if len(existing_ours) == 1 and existing_ours[0] == desired:
             continue
         settings["hooks"][event] = foreign + [desired]
         changed = True
+    if dry_run:
+        if not changed:
+            return "installed"
+        return "stale marker" if any_ours_present else "missing"
     if not changed:
         return "unchanged"
     try:
@@ -111,7 +124,8 @@ def install_hooks(args=None) -> int:
     return 0
 
 
-def install_codex_hooks(hooks_path: Path | None = None) -> str:
+def install_codex_hooks(hooks_path: Path | None = None, dry_run: bool = False) -> str:
+    """See install_claude_hooks' docstring for the dry_run=True return values."""
     codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
     path = hooks_path or (codex_home / "hooks.json")
     settings: dict = {}
@@ -123,6 +137,10 @@ def install_codex_hooks(hooks_path: Path | None = None) -> str:
             return "failed"
     settings.setdefault("hooks", {})
     before = json.dumps(settings, sort_keys=True)
+    any_ours_present = any(
+        isinstance(groups, list) and any(_claude_group_is_ours(g) for g in groups)
+        for groups in settings["hooks"].values()
+    )
 
     for event in list(settings["hooks"].keys()):
         value = settings["hooks"][event]
@@ -142,7 +160,12 @@ def install_codex_hooks(hooks_path: Path | None = None) -> str:
         settings["hooks"][event] = groups
 
     after = json.dumps(settings, sort_keys=True)
-    if after == before:
+    changed = after != before
+    if dry_run:
+        if not changed:
+            return "installed"
+        return "stale marker" if any_ours_present else "missing"
+    if not changed:
         return "unchanged"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

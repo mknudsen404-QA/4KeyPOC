@@ -16,6 +16,7 @@ from pathlib import Path
 
 from switchboard.clock import SystemClock
 from switchboard.device import FdDevice, FileDevice, SerialDevice, find_default_port, sync_device
+from switchboard.doctor import doctor_command
 from switchboard.hooks_install import install_hooks
 from switchboard.launcher import (
     DEFAULT_AGENTS_CONFIG,
@@ -354,6 +355,13 @@ def build_parser() -> argparse.ArgumentParser:
     sync_parser.add_argument("--baud", type=int, default=115200)
     sync_parser.add_argument("slot_pos", nargs="?", type=int, help="Optional slot number to sync")
     sync_parser.add_argument("--slot", type=int, help="Sync one slot instead of all registered slots")
+
+    doctor_parser = subcommands.add_parser("doctor", help="Probe the bridge's operating environment and report health")
+    doctor_parser.set_defaults(func=doctor_command)
+    doctor_parser.add_argument("--port", help="Serial port to probe, for example /dev/cu.usbmodem2301")
+    doctor_parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    doctor_parser.add_argument("--agents-config", type=Path, default=DEFAULT_AGENTS_CONFIG)
+    doctor_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON instead of text lines")
 
     return parser
 
