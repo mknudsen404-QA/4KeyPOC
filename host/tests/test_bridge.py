@@ -2,6 +2,7 @@ from switchboard.bridge import Bridge
 from switchboard.clock import FakeClock
 from switchboard.device import FakeDevice
 from switchboard.events import BoardEvent, HookEvent
+from switchboard.key_injector import FakeKeyInjector
 from switchboard.liveness import FakeProber
 from switchboard.model import Liveness
 from switchboard.registry import Registry
@@ -16,6 +17,7 @@ def make_bridge(
     device = FakeDevice()
     terminal = FakeTerminal()
     prober = FakeProber()
+    key_injector = FakeKeyInjector()
     clock = clock or FakeClock()
     bridge = Bridge(
         registry=registry,
@@ -28,12 +30,13 @@ def make_bridge(
         dry_run=dry_run,
         no_open=no_open,
         close_dead_tabs=close_dead_tabs,
+        key_injector=key_injector,
     )
-    return bridge, registry, device, terminal, prober, clock
+    return bridge, registry, device, terminal, prober, clock, key_injector
 
 
 def test_step_select_empty_slot_launches_and_registers(tmp_path):
-    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path)
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path)
     bridge.step(BoardEvent("agent.select", {"slot": 1}))
 
     assert len(terminal.opened) == 1
@@ -43,7 +46,7 @@ def test_step_select_empty_slot_launches_and_registers(tmp_path):
 
 
 def test_step_select_unknown_never_launches(tmp_path):
-    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path)
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path)
     registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "shell", "status": "launched"}}})
     prober.answers["1"] = Liveness.UNKNOWN  # --no-open record: no terminal_tty to probe
     bridge.step(BoardEvent("agent.select", {"slot": 1}))
@@ -52,7 +55,7 @@ def test_step_select_unknown_never_launches(tmp_path):
 
 def test_step_hook_sequence_matches_phase0_golden(tmp_path):
     clock = FakeClock()
-    bridge, registry, device, terminal, prober, _ = make_bridge(tmp_path, clock=clock)
+    bridge, registry, device, terminal, prober, _, _key_injector = make_bridge(tmp_path, clock=clock)
     registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "status": "launched"}}})
 
     bridge.step(HookEvent("1", "SessionStart", {"session_id": "s-aaa"}))
@@ -78,7 +81,7 @@ def test_step_hook_sequence_matches_phase0_golden(tmp_path):
 
 
 def test_effects_run_after_lock_released(tmp_path):
-    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path)
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path)
     registry.save({"version": 1, "slots": {}})
 
     acquired = []
@@ -102,7 +105,7 @@ def test_worker_survives_step_exception(tmp_path):
     """run()'s worker loop wraps step() in try/except so one event's
     exception doesn't kill the thread — exercised here directly (no
     threads, no real time) by calling step() the same way run() does."""
-    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path)
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path)
     registry.save({"version": 1, "slots": {}})
 
     calls = {"n": 0}
@@ -128,7 +131,7 @@ def test_worker_survives_step_exception(tmp_path):
 
 
 def test_startup_sync_pushes_four_updates_and_frees_dead(tmp_path):
-    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path, auto_launch=False)
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path, auto_launch=False)
     registry.save(
         {
             "version": 1,
@@ -152,7 +155,7 @@ def test_startup_sync_pushes_four_updates_and_frees_dead(tmp_path):
 
 
 def test_pending_ack_retries_up_to_three_times_then_gives_up(tmp_path):
-    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path)
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path)
     registry.save({"version": 1, "slots": {}})
 
     bridge.step(BoardEvent("agent.select", {"slot": 1}))  # launches slot 1 -> 1 send, pending_acks["1"]
@@ -174,7 +177,7 @@ def test_pending_ack_retries_up_to_three_times_then_gives_up(tmp_path):
 
 
 def test_pending_ack_cleared_by_matching_ack_event(tmp_path):
-    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path)
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path)
     registry.save({"version": 1, "slots": {}})
 
     bridge.step(BoardEvent("agent.select", {"slot": 1}))
@@ -189,7 +192,7 @@ def test_pending_ack_cleared_by_matching_ack_event(tmp_path):
 
 
 def test_pending_ack_not_yet_due_is_not_retried(tmp_path):
-    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path)
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path)
     registry.save({"version": 1, "slots": {}})
 
     bridge.step(BoardEvent("agent.select", {"slot": 1}))
@@ -199,7 +202,7 @@ def test_pending_ack_not_yet_due_is_not_retried(tmp_path):
 
 
 def test_close_dead_tabs_closes_terminal_when_enabled(tmp_path):
-    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path, close_dead_tabs=True)
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path, close_dead_tabs=True)
     registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "status": "idle", "terminal_tty": "/dev/ttys001"}}})
     prober.answers["1"] = Liveness.DEAD
 
@@ -212,7 +215,7 @@ def test_close_dead_tabs_closes_terminal_when_enabled(tmp_path):
 
 
 def test_close_dead_tabs_leaves_terminal_when_disabled(tmp_path):
-    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path, close_dead_tabs=False)
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path, close_dead_tabs=False)
     registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "status": "idle", "terminal_tty": "/dev/ttys001"}}})
 
     from switchboard.events import LivenessObserved
@@ -222,6 +225,40 @@ def test_close_dead_tabs_leaves_terminal_when_disabled(tmp_path):
 
     assert terminal.closed == []
     assert "1" not in registry.load()["slots"]  # still freed either way
+
+
+def test_voice_hold_start_holds_key_after_focus_settles(tmp_path):
+    bridge, registry, device, terminal, prober, clock, key_injector = make_bridge(tmp_path)
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "terminal_tty": "/dev/ttys001"}}})
+
+    bridge.step(BoardEvent("voice.hold.start", {"slot": 1}))
+
+    assert terminal.focused == ["/dev/ttys001"]  # FakeTerminal.focus() settles frontmost immediately
+    assert key_injector.held == [(1234, 49)]
+
+
+def test_voice_hold_start_aborts_if_focus_never_settles(tmp_path):
+    bridge, registry, device, terminal, prober, clock, key_injector = make_bridge(tmp_path)
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "terminal_tty": "/dev/ttys001"}}})
+
+    # Simulate Terminal never actually switching tabs (focus() still records
+    # the call for the log line, but frontmost_tty() stays whatever it was).
+    real_focus = terminal.focus
+    terminal.focus = lambda tty: (real_focus(tty), setattr(terminal, "frontmost", None))[0]
+
+    bridge.step(BoardEvent("voice.hold.start", {"slot": 1}))
+
+    assert key_injector.held == []  # hold aborted, never reaches the injector
+
+
+def test_voice_hold_stop_releases_key(tmp_path):
+    bridge, registry, device, terminal, prober, clock, key_injector = make_bridge(tmp_path)
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "terminal_tty": "/dev/ttys001"}}})
+
+    bridge.step(BoardEvent("voice.hold.start", {"slot": 1}))
+    bridge.step(BoardEvent("voice.hold.stop", {"slot": 1}))
+
+    assert key_injector.released == [(1234, 49)]
 
 
 def test_default_log_flushes(monkeypatch):

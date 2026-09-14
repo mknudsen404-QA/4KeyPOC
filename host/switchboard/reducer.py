@@ -44,6 +44,10 @@ class Focus(Effect):
 @dataclass(frozen=True)
 class VoiceKey(Effect):
     down: bool
+    # Only meaningful (and only ever set) on down=True: lets the Bridge poll
+    # for focus having actually settled on this tty before starting the
+    # repeater, since Focus(tty) can return before Terminal has switched.
+    tty: str | None = None
 
 
 @dataclass(frozen=True)
@@ -220,7 +224,7 @@ def _handle_voice_start(slots: dict[str, dict], state: ReducerState, payload: di
     if not tty or payload.get("liveness") == "dead":
         return [Log(f"Voice hold start: agent {slot} has no open terminal tab")]
     state.mic_active = True
-    return [Focus(tty), VoiceKey(True), Log(f"Voice hold started for agent {slot}")]
+    return [Focus(tty), VoiceKey(True, tty), Log(f"Voice hold started for agent {slot}")]
 
 
 def _handle_voice_stop(slots: dict[str, dict], state: ReducerState, payload: dict) -> list[Effect]:

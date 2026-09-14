@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import queue
 import threading
+import time
 import traceback
 from typing import Callable
 
@@ -15,11 +16,20 @@ from switchboard import model
 from switchboard.device import DeviceLink
 from switchboard.events import BoardEvent, Event, LivenessObserved, Shutdown, SlotRegistered, parse_board_line
 from switchboard.hooks_server import HOOK_HOST, HOOK_PORT, start_hook_server
+from switchboard.key_injector import FakeKeyInjector, KeyInjector
 from switchboard.launcher import build_launch
 from switchboard.liveness import ProcessProber
 from switchboard.reducer import CloseTab, Effect, Focus, Launch, Log, ReducerState, SendUpdate, VoiceKey, reduce
 from switchboard.registry import Registry
 from switchboard.terminal import TerminalDriver
+
+# How long to wait for Terminal to actually finish switching to a slot's tab
+# before starting a PTT hold — Focus(tty) can return before the switch has
+# visibly settled, which is the second most likely cause of a hold landing
+# in the wrong tab.
+FOCUS_SETTLE_TIMEOUT_S = 0.3
+FOCUS_SETTLE_POLL_INTERVAL_S = 0.03
+
 
 def _default_log(message: str) -> None:
     # Plain `print` alone isn't enough here: when stdout is redirected to a
@@ -56,12 +66,14 @@ class Bridge:
         dry_run: bool,
         no_open: bool,
         close_dead_tabs: bool = False,
+        key_injector: KeyInjector | None = None,
         log: Callable[[str], None] = _default_log,
     ) -> None:
         self.registry = registry
         self.device = device
         self.terminal = terminal
         self.prober = prober
+        self.key_injector = key_injector or FakeKeyInjector()
         self.clock = clock
         self.launch_config = launch_config
         self.auto_launch = auto_launch
@@ -155,12 +167,31 @@ class Bridge:
         elif isinstance(effect, Focus):
             self.terminal.focus(effect.tty)
         elif isinstance(effect, VoiceKey):
-            self.terminal.post_key(self.terminal.terminal_pid(), SPACE_KEYCODE, effect.down)
+            self._apply_voice_key(effect)
         elif isinstance(effect, CloseTab):
             if self.close_dead_tabs:
                 self.terminal.close(effect.tty)
         elif isinstance(effect, Log):
             self.log(effect.message)
+
+    def _apply_voice_key(self, effect: VoiceKey) -> None:
+        pid = self.terminal.terminal_pid()
+        if not effect.down:
+            self.key_injector.release(pid, SPACE_KEYCODE)
+            return
+        if effect.tty is not None and not self._wait_for_focus_settled(effect.tty):
+            self.log(f"voice hold aborted: focus did not settle on {effect.tty} within {FOCUS_SETTLE_TIMEOUT_S}s")
+            return
+        self.key_injector.hold(pid, SPACE_KEYCODE)
+
+    def _wait_for_focus_settled(self, tty: str) -> bool:
+        deadline = time.monotonic() + FOCUS_SETTLE_TIMEOUT_S
+        while True:
+            if self.terminal.frontmost_tty() == tty:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(FOCUS_SETTLE_POLL_INTERVAL_S)
 
     def _apply_launch(self, slot: int) -> None:
         plan = build_launch(slot, self.launch_config)

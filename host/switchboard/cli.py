@@ -18,6 +18,7 @@ from switchboard.clock import SystemClock
 from switchboard.device import FdDevice, FileDevice, SerialDevice, find_default_port, sync_device
 from switchboard.doctor import doctor_command
 from switchboard.hooks_install import install_hooks
+from switchboard.key_injector import FakeKeyInjector, RepeatingKeyInjector, macos_key_repeat_timing
 from switchboard.launcher import (
     DEFAULT_AGENTS_CONFIG,
     DEFAULT_CWD,
@@ -195,10 +196,18 @@ def _make_bridge(args: argparse.Namespace, device):
     from switchboard.bridge import Bridge, _default_log
 
     terminal = NullTerminal() if (args.no_open or args.dry_run) else _terminal
+    if isinstance(terminal, NullTerminal):
+        key_injector = FakeKeyInjector()
+    else:
+        initial_delay, repeat_interval = macos_key_repeat_timing()
+        key_injector = RepeatingKeyInjector(
+            terminal.post_key, initial_delay=initial_delay, repeat_interval=repeat_interval, log=_default_log
+        )
     return Bridge(
         registry=Registry(args.registry),
         device=device,
         terminal=terminal,
+        key_injector=key_injector,
         # flush=True: `listen` runs indefinitely with stdout redirected to
         # a plain file under the LaunchAgent (bridge.out.log, not a tty),
         # which CPython fully block-buffers by default — bare `print`

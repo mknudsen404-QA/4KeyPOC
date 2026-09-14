@@ -25,6 +25,8 @@ class TerminalDriver(Protocol):
 
     def post_key(self, pid: int, keycode: int, down: bool) -> None: ...
 
+    def frontmost_tty(self) -> str | None: ...
+
 
 def _find_tab_script(body: str) -> str:
     """AppleScript fragment shared by every "find the tab owning this tty"
@@ -122,6 +124,27 @@ end run
         event = Quartz.CGEventCreateKeyboardEvent(None, keycode, down)
         Quartz.CGEventPostToPid(pid, event)
 
+    def frontmost_tty(self) -> str | None:
+        """tty of the selected tab of Terminal's front window, but only if
+        Terminal is actually the frontmost application — used to poll for
+        focus having settled before starting a PTT hold (Focus(tty) can
+        return before Terminal has actually switched tabs)."""
+        script = """
+on run argv
+  tell application "System Events"
+    if (name of first process whose frontmost is true) is not "Terminal" then
+      return "not_frontmost"
+    end if
+  end tell
+  tell application "Terminal"
+    return tty of selected tab of front window
+  end tell
+end run
+"""
+        result = subprocess.run(["osascript", "-e", script], check=False, capture_output=True, text=True)
+        tty = result.stdout.strip()
+        return tty if tty and tty != "not_frontmost" else None
+
     def close(self, tty: str) -> bool:
         """Close the tab owning tty (Phase 2.4's --close-dead-tabs)."""
         script = _find_tab_script("close targetTab")
@@ -151,6 +174,10 @@ class NullTerminal:
     def post_key(self, pid: int, keycode: int, down: bool) -> None:
         self._log("NullTerminal: post_key() is a no-op")
 
+    def frontmost_tty(self) -> str | None:
+        self._log("NullTerminal: frontmost_tty() is a no-op")
+        return None
+
     def close(self, tty: str) -> bool:
         self._log("NullTerminal: close() is a no-op")
         return False
@@ -165,6 +192,10 @@ class FakeTerminal:
         self.posted: list[tuple[int | None, int, bool]] = []
         self.closed: list[str] = []
         self._n = 0
+        # Tracks focus() as a well-behaved terminal would, so frontmost_tty()
+        # reflects it immediately (no real settling delay to simulate in
+        # tests). Set to None directly to simulate focus not settling.
+        self.frontmost: str | None = None
 
     def open(self, shell_command: str) -> str | None:
         self._n += 1
@@ -174,6 +205,7 @@ class FakeTerminal:
 
     def focus(self, tty: str) -> bool:
         self.focused.append(tty)
+        self.frontmost = tty
         return True
 
     def terminal_pid(self) -> int | None:
@@ -181,6 +213,9 @@ class FakeTerminal:
 
     def post_key(self, pid: int, keycode: int, down: bool) -> None:
         self.posted.append((pid, keycode, down))
+
+    def frontmost_tty(self) -> str | None:
+        return self.frontmost
 
     def close(self, tty: str) -> bool:
         self.closed.append(tty)

@@ -505,7 +505,7 @@ def test_voice_hold_start_emits_focus_and_key_down():
     state = ReducerState()
     slots, effects = reduce(slots, state, BoardEvent("voice.hold.start", {"slot": 1}), NOW, auto_launch=False)
     assert Focus("/dev/ttys001") in effects
-    assert VoiceKey(True) in effects
+    assert VoiceKey(True, "/dev/ttys001") in effects
     assert state.mic_active is True
 
 

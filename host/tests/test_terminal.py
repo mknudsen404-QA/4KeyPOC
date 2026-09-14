@@ -20,3 +20,14 @@ def test_terminal_fake_records_calls():
 
     assert terminal.close(tty1) is True
     assert terminal.closed == [tty1]
+
+
+def test_terminal_fake_frontmost_tty_tracks_focus():
+    terminal = FakeTerminal()
+    assert terminal.frontmost_tty() is None
+
+    terminal.focus("/dev/ttysFAKE1")
+    assert terminal.frontmost_tty() == "/dev/ttysFAKE1"
+
+    terminal.frontmost = None  # simulate focus not having settled yet
+    assert terminal.frontmost_tty() is None
