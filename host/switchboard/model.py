@@ -109,14 +109,14 @@ def set_status(record: dict, status: str, now: int) -> None:
         record.pop("busy_since", None)
 
 
-def agent_update_event(record: dict, now: float) -> dict:
+def agent_update_event(record: dict, now: float, *, liveness: str | None = None) -> dict:
     status = record.get("status", "empty")
     busy_elapsed_ms = 0
     if status in BUSY_STATUSES:
         busy_since = record.get("busy_since")
         if busy_since:
             busy_elapsed_ms = max(0, round((now - int(busy_since)) * 1000))
-    return {
+    event = {
         "event": "agent.update",
         "slot": record.get("slot"),
         "name": record.get("name", f"Agent {record.get('slot', '')}"),
@@ -126,6 +126,9 @@ def agent_update_event(record: dict, now: float) -> dict:
         "activity": record.get("activity", ""),
         "busy_elapsed_ms": busy_elapsed_ms,
     }
+    if liveness is not None:
+        event["liveness"] = liveness
+    return event
 
 
 # Real lifecycle hook events, not screen-scraped guesses — see

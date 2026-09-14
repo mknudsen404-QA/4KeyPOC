@@ -178,7 +178,16 @@ inline uint32_t applySelectionFloor(uint32_t color, bool selected) {
 // (the busy ramp if the status is busy, else the static per-status color),
 // dim it if this key isn't selected, then apply whatever pulse the status
 // calls for.
-inline uint32_t renderKey(Status s, uint32_t elapsedMs, bool selected, unsigned long nowMs) {
+//
+// `uncertain` overrides all of that: liveness can no longer be confirmed
+// for this slot (two consecutive UNKNOWN probes — see the reducer), so the
+// LED may be lying about `s`. When true, render Status::Unknown's amber
+// with its 3000ms pulse regardless of what `s` actually is.
+inline uint32_t renderKey(Status s, uint32_t elapsedMs, bool selected, unsigned long nowMs, bool uncertain = false) {
+  if (uncertain) {
+    uint32_t color = applySelectionFloor(colorForStatus(Status::Unknown), selected);
+    return scaleColor(color, breathFactor(nowMs, pulsePeriodFor(Status::Unknown, elapsedMs)));
+  }
   uint32_t base = statusIsBusy(s) ? busyColor(elapsedMs) : colorForStatus(s);
   uint32_t color = applySelectionFloor(base, selected);
   unsigned long period = pulsePeriodFor(s, elapsedMs);

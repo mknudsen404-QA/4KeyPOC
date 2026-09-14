@@ -64,6 +64,26 @@ static void test_pulse_periods() {
   assert(pulsePeriodFor(Status::Done, 0) == 0UL);
 }
 
+static void test_uncertain_overrides_status_with_amber() {
+  // renderKey(Working, 0, false, 0, /*uncertain=*/true) is amber — the LED
+  // may be lying about "working" since liveness can't be confirmed.
+  uint32_t certain = renderKey(Status::Working, 0, /*selected=*/false, /*nowMs=*/0, /*uncertain=*/false);
+  uint32_t uncertain = renderKey(Status::Working, 0, /*selected=*/false, /*nowMs=*/0, /*uncertain=*/true);
+  assert(certain != uncertain);
+  // At nowMs=0 the breathing wave is at its floor (0.35), so compare against
+  // the dimmed (non-selected) amber, not the raw colorForStatus() value.
+  uint32_t expectedAmber = scaleColor(applySelectionFloor(colorForStatus(Status::Unknown), false), 0.35f);
+  expect_rgb_close(uncertain, expectedAmber, 2, "renderKey(uncertain=true)");
+}
+
+static void test_uncertain_pulses_regardless_of_selection() {
+  // The default argument (uncertain=false) must not silently change any
+  // existing 4-arg call site's behavior.
+  uint32_t withDefault = renderKey(Status::Idle, 0, true, 0);
+  uint32_t explicitFalse = renderKey(Status::Idle, 0, true, 0, false);
+  assert(withDefault == explicitFalse);
+}
+
 int main() {
   test_hsv_to_rgb_reference();
   test_busy_color_endpoints();
@@ -72,6 +92,8 @@ int main() {
   test_status_from_string();
   test_render_key_dim_floor();
   test_pulse_periods();
+  test_uncertain_overrides_status_with_amber();
+  test_uncertain_pulses_regardless_of_selection();
   printf("led_model_test: all tests passed\n");
   return 0;
 }

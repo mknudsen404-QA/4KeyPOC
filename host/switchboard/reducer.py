@@ -27,6 +27,7 @@ class Effect:
 @dataclass(frozen=True)
 class SendUpdate(Effect):
     slot_key: str  # push agent.update (record or empty) for this slot
+    liveness: str | None = None  # "alive" | "unknown", set only on a confirmed liveness transition
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class ReducerState:
     selected_slot: int | None = None
     mic_active: bool = False
     dead_probes: dict[str, int] = field(default_factory=dict)
+    unknown_probes: dict[str, int] = field(default_factory=dict)
 
 
 def reduce(
@@ -209,20 +211,42 @@ def _reduce_liveness_observed(slots: dict[str, dict], state: ReducerState, event
     """Free any slot confirmed dead: two consecutive DEAD readings by
     default, or a single one at startup (confirm=False) since nothing has
     been running yet and a first DEAD reading is trustworthy.
+
+    Also tracks UNKNOWN runs per slot: the LED may be lying (still showing
+    whatever status it last got, even though liveness can no longer be
+    confirmed), so two consecutive UNKNOWN readings send one update
+    flagged `liveness: "unknown"` (the firmware pulses amber regardless of
+    status), and the next confirmed ALIVE reading sends one flagged
+    `liveness: "alive"` to clear it. Only a single SendUpdate fires at each
+    transition, not on every tick the slot stays UNKNOWN.
     """
     threshold = 2 if event.confirm else 1
     effects: list[Effect] = []
     for slot_key, result in event.results.items():
-        if result is not Liveness.DEAD:
+        if result is Liveness.DEAD:
+            state.unknown_probes.pop(slot_key, None)
+            count = state.dead_probes.get(slot_key, 0) + 1
+            if count < threshold:
+                state.dead_probes[slot_key] = count
+                continue
             state.dead_probes.pop(slot_key, None)
+            if slots.pop(slot_key, None) is not None:
+                effects.append(SendUpdate(slot_key))
             continue
-        count = state.dead_probes.get(slot_key, 0) + 1
-        if count < threshold:
-            state.dead_probes[slot_key] = count
-            continue
+
         state.dead_probes.pop(slot_key, None)
-        if slots.pop(slot_key, None) is not None:
-            effects.append(SendUpdate(slot_key))
+        if result is Liveness.UNKNOWN:
+            count = state.unknown_probes.get(slot_key, 0) + 1
+            state.unknown_probes[slot_key] = count
+            if count == 2 and slot_key in slots:
+                effects.append(SendUpdate(slot_key, liveness="unknown"))
+            continue
+
+        # ALIVE: clear an unknown run, if any, and tell the board it's
+        # trustworthy again.
+        was_unknown = state.unknown_probes.pop(slot_key, None) is not None
+        if was_unknown and slot_key in slots:
+            effects.append(SendUpdate(slot_key, liveness="alive"))
     return effects
 
 

@@ -145,3 +145,50 @@ def test_startup_sync_pushes_four_updates_and_frees_dead(tmp_path):
     assert by_slot[3]["status"] == "empty"
     assert by_slot[4]["status"] == "empty"
     assert "2" not in registry.load()["slots"]
+
+
+def test_pending_ack_retries_up_to_three_times_then_gives_up(tmp_path):
+    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path)
+    registry.save({"version": 1, "slots": {}})
+
+    bridge.step(BoardEvent("agent.select", {"slot": 1}))  # launches slot 1 -> 1 send, pending_acks["1"]
+    assert len(device.sent) == 1
+    assert "1" in bridge.pending_acks
+
+    clock.advance(1.1)
+    bridge.retry_pending_acks()
+    assert len(device.sent) == 2  # attempt 2
+
+    clock.advance(1.1)
+    bridge.retry_pending_acks()
+    assert len(device.sent) == 3  # attempt 3
+
+    clock.advance(1.1)
+    bridge.retry_pending_acks()  # 3 attempts already spent: log and give up, no 4th send
+    assert len(device.sent) == 3
+    assert "1" not in bridge.pending_acks
+
+
+def test_pending_ack_cleared_by_matching_ack_event(tmp_path):
+    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path)
+    registry.save({"version": 1, "slots": {}})
+
+    bridge.step(BoardEvent("agent.select", {"slot": 1}))
+    assert "1" in bridge.pending_acks
+
+    bridge.step(BoardEvent("agent.update.ack", {"slot": 1}))
+    assert "1" not in bridge.pending_acks
+
+    clock.advance(5)
+    bridge.retry_pending_acks()
+    assert len(device.sent) == 1  # no retry: the ack already cleared it
+
+
+def test_pending_ack_not_yet_due_is_not_retried(tmp_path):
+    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path)
+    registry.save({"version": 1, "slots": {}})
+
+    bridge.step(BoardEvent("agent.select", {"slot": 1}))
+    clock.advance(0.5)  # under the 1s threshold
+    bridge.retry_pending_acks()
+    assert len(device.sent) == 1

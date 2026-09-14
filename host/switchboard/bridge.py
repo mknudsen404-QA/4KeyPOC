@@ -63,6 +63,12 @@ class Bridge:
         # callers that retry on disconnect (cli.py's listen --retry) check
         # this after run() returns, since run() itself always returns 0.
         self.last_shutdown_error: Exception | None = None
+        # slot_key -> (sent_at_monotonic, event_dict, attempts). Populated
+        # by every SendUpdate; cleared by a matching agent.update.ack.
+        # Retried (up to 3 attempts total) by the liveness ticker for any
+        # entry that's gone unacked for over a second — the board may have
+        # missed the original send (an interleaved-write hiccup, e.g.).
+        self.pending_acks: dict[str, tuple[float, dict, int]] = {}
 
     def submit(self, event: Event) -> None:
         """Thread-safe; callable from any thread."""
@@ -72,6 +78,10 @@ class Bridge:
         """Process ONE event on the calling thread. The only place that
         touches the registry inside this process."""
         event = self._resolve_probes(event)
+        if isinstance(event, BoardEvent) and event.name == "agent.update.ack":
+            slot = event.payload.get("slot")
+            if slot is not None:
+                self.pending_acks.pop(str(slot), None)
         with self.registry.transaction() as reg:
             slots = reg.setdefault("slots", {})
             new_slots, effects = reduce(
@@ -124,7 +134,9 @@ class Bridge:
             record = snapshot.get(effect.slot_key)
             if record is None:
                 record = {"slot": int(effect.slot_key), "status": "empty", "activity": "press to launch"}
-            self.device.send(model.agent_update_event(record, self.clock.now()))
+            event_dict = model.agent_update_event(record, self.clock.now(), liveness=effect.liveness)
+            self.device.send(event_dict)
+            self.pending_acks[effect.slot_key] = (self.clock.monotonic(), event_dict, 1)
         elif isinstance(effect, Launch):
             self._apply_launch(effect.slot)
         elif isinstance(effect, Focus):
@@ -142,6 +154,22 @@ class Bridge:
         tty = None if self.no_open else self.terminal.open(plan.shell_command)
         record = model.slot_record(**plan.record_fields, terminal_tty=tty, now=int(self.clock.now()))
         self.step(SlotRegistered(record))  # re-entrant: same thread, transaction already released
+
+    def retry_pending_acks(self) -> None:
+        """Resend any SendUpdate the board hasn't acked in over a second,
+        up to 3 attempts total; log and give up after that. Called from
+        the liveness ticker (real use) or directly (tests, no threads).
+        """
+        now = self.clock.monotonic()
+        for slot_key, (sent_at, event_dict, attempts) in list(self.pending_acks.items()):
+            if now - sent_at < 1.0:
+                continue
+            if attempts >= 3:
+                self.log(f"slot {slot_key}: board did not ack after 3 attempts")
+                self.pending_acks.pop(slot_key, None)
+                continue
+            self.device.send(event_dict)
+            self.pending_acks[slot_key] = (now, event_dict, attempts + 1)
 
     def run(
         self,
@@ -175,6 +203,7 @@ class Bridge:
                         results = {k: self.prober.probe(v) for k, v in slots.items()}
                     if results:
                         self.submit(LivenessObserved(results))
+                    self.retry_pending_acks()
                 except Exception:  # noqa: BLE001 - must survive to probe again next tick
                     traceback.print_exc()
 

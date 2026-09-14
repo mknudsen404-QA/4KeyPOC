@@ -66,6 +66,17 @@ def free_port() -> int:
     return port
 
 
+def _auto_ack(master_fd, parsed_line):
+    """Simulate a real board: ack every agent.update immediately. Without
+    this, the bridge's pending-ack retry logic (Phase 2.3b) sees every
+    update from these tests as never-acked, and a clock.advance() in a
+    later test step makes it look overdue and retries it — a spurious
+    extra device line these tests don't expect."""
+    if parsed_line.get("event") == "agent.update":
+        ack = json.dumps({"event": "agent.update.ack", "slot": parsed_line.get("slot")}).encode() + b"\n"
+        os.write(master_fd, ack)
+
+
 def expect_lines(fd, count, timeout=6.0):
     """Block until `count` JSON lines have been read from fd, or fail."""
     buffer = b""
@@ -82,7 +93,9 @@ def expect_lines(fd, count, timeout=6.0):
         while b"\n" in buffer:
             line, buffer = buffer.split(b"\n", 1)
             if line.strip():
-                lines.append(json.loads(line))
+                parsed = json.loads(line)
+                lines.append(parsed)
+                _auto_ack(fd, parsed)
     assert len(lines) >= count, f"expected {count} lines within {timeout}s, got {len(lines)}: {lines}"
     return lines[:count]
 
@@ -103,7 +116,9 @@ def drain_lines(fd, timeout=0.4):
         while b"\n" in buffer:
             line, buffer = buffer.split(b"\n", 1)
             if line.strip():
-                lines.append(json.loads(line))
+                parsed = json.loads(line)
+                lines.append(parsed)
+                _auto_ack(fd, parsed)
     return lines
 
 

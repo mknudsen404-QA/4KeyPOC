@@ -198,6 +198,41 @@ def test_liveness_observed_startup_frees_on_first_dead():
     assert "1" not in slots
 
 
+def test_liveness_observed_two_unknown_sends_amber():
+    slots = {"1": {"slot": 1, "status": "working"}}
+    state = ReducerState()
+    slots, effects = reduce(slots, state, LivenessObserved({"1": model.Liveness.UNKNOWN}), NOW, auto_launch=False)
+    assert effects == []  # first UNKNOWN: not yet confirmed
+    slots, effects = reduce(slots, state, LivenessObserved({"1": model.Liveness.UNKNOWN}), NOW, auto_launch=False)
+    assert effects == [SendUpdate("1", liveness="unknown")]
+    assert "1" in slots  # unlike DEAD, UNKNOWN never frees the slot
+
+
+def test_liveness_observed_unknown_does_not_resend_every_tick():
+    slots = {"1": {"slot": 1, "status": "working"}}
+    state = ReducerState()
+    reduce(slots, state, LivenessObserved({"1": model.Liveness.UNKNOWN}), NOW, auto_launch=False)
+    reduce(slots, state, LivenessObserved({"1": model.Liveness.UNKNOWN}), NOW, auto_launch=False)
+    slots, effects = reduce(slots, state, LivenessObserved({"1": model.Liveness.UNKNOWN}), NOW, auto_launch=False)
+    assert effects == []  # already confirmed unknown; no repeat send
+
+
+def test_liveness_observed_alive_after_unknown_clears_amber():
+    slots = {"1": {"slot": 1, "status": "working"}}
+    state = ReducerState()
+    reduce(slots, state, LivenessObserved({"1": model.Liveness.UNKNOWN}), NOW, auto_launch=False)
+    reduce(slots, state, LivenessObserved({"1": model.Liveness.UNKNOWN}), NOW, auto_launch=False)
+    slots, effects = reduce(slots, state, LivenessObserved({"1": model.Liveness.ALIVE}), NOW, auto_launch=False)
+    assert effects == [SendUpdate("1", liveness="alive")]
+
+
+def test_liveness_observed_alive_without_prior_unknown_sends_nothing():
+    slots = {"1": {"slot": 1, "status": "working"}}
+    state = ReducerState()
+    slots, effects = reduce(slots, state, LivenessObserved({"1": model.Liveness.ALIVE}), NOW, auto_launch=False)
+    assert effects == []
+
+
 # ---- New: reducer never performs I/O -----------------------------------
 
 

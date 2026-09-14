@@ -21,6 +21,10 @@ Adafruit_NeoKey_1x4 neokey;
 int selectedSlot = 0;  // 0 = none selected yet
 Status slotStatus[AGENT_KEY_COUNT] = {Status::Empty, Status::Empty, Status::Empty};
 unsigned long slotBusyStartMs[AGENT_KEY_COUNT] = {0, 0, 0};
+// Set from each update's "liveness" field: "unknown" -> true, "alive" or
+// the field being absent (a status-driven update, e.g. from a hook, which
+// only happens if the process is alive) -> false.
+bool slotUncertain[AGENT_KEY_COUNT] = {false, false, false};
 bool ptt_held = false;
 
 void redrawAgentKeys() {
@@ -28,7 +32,7 @@ void redrawAgentKeys() {
   for (uint8_t i = 0; i < AGENT_KEY_COUNT; i++) {
     bool isSelected = (selectedSlot == AGENT_SLOTS[i]);
     uint32_t elapsed = statusIsBusy(slotStatus[i]) ? (uint32_t)(now - slotBusyStartMs[i]) : 0;
-    neokey.pixels.setPixelColor(i, renderKey(slotStatus[i], elapsed, isSelected, now));
+    neokey.pixels.setPixelColor(i, renderKey(slotStatus[i], elapsed, isSelected, now, slotUncertain[i]));
   }
 }
 
@@ -60,10 +64,12 @@ void pollIncomingSerial() {
             // busy_seconds is accepted for one release as a fallback while
             // any bridge that hasn't been restarted yet is still sending it.
             uint32_t busyElapsedMs = doc["busy_elapsed_ms"] | (uint32_t)(doc["busy_seconds"] | 0) * 1000UL;
+            bool uncertain = strcmp(doc["liveness"] | "", "unknown") == 0;
             for (uint8_t i = 0; i < AGENT_KEY_COUNT; i++) {
               if (AGENT_SLOTS[i] == slot) {
                 slotStatus[i] = statusFromString(status);
                 slotBusyStartMs[i] = millis() - busyElapsedMs;
+                slotUncertain[i] = uncertain;
               }
             }
             sendEvent("agent.update.ack", slot);
