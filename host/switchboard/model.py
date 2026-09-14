@@ -11,11 +11,13 @@ from __future__ import annotations
 import enum
 import shlex
 
-STATUS_CHOICES = ("empty", "launched", "idle", "thinking", "working", "waiting", "needs_input", "blocked", "done")
-# Statuses long enough to be worth escalating the LED for — the ones that
-# just mean "still going," not the ones that already stand out on their own
-# (needs_input/blocked are already flagged, done/idle aren't "busy").
-BUSY_STATUSES = ("working", "thinking")
+from switchboard.status_table import BUSY_STATUSES, CLAUDE_HOOK_STATUS, CODEX_HOOK_EVENTS, CODEX_HOOK_STATUS, STATUS_CHOICES
+
+# STATUS_CHOICES/BUSY_STATUSES/CLAUDE_HOOK_STATUS/CODEX_HOOK_STATUS/
+# CODEX_HOOK_EVENTS live in status_table.py now (the single source of
+# truth the firmware header is also generated from) and are just
+# re-exported here so every existing `from switchboard.model import ...`
+# call site keeps working unchanged.
 
 # The device's effort dial sends LOW/MED/HIGH/XHIGH/MAX (lowercased by the
 # bridge before storage). Neither CLI's effort vocabulary matches ours
@@ -129,33 +131,6 @@ def agent_update_event(record: dict, now: float, *, liveness: str | None = None)
     if liveness is not None:
         event["liveness"] = liveness
     return event
-
-
-# Real lifecycle hook events, not screen-scraped guesses — see
-# https://github.com/stephenleo/OpenMicro, which validated this approach.
-# PreToolUse only fires for AskUserQuestion (see hooks_install's matcher table).
-CLAUDE_HOOK_STATUS = {
-    "SessionStart": "idle",
-    "UserPromptSubmit": "working",
-    "PreToolUse": "needs_input",
-    "PostToolUse": "working",
-    "Notification": "needs_input",
-    "Stop": "done",
-    "SessionEnd": "empty",
-}
-CODEX_HOOK_STATUS = {
-    "UserPromptSubmit": "working",
-    "PermissionRequest": "needs_input",
-    "PostToolUse": "working",
-    "Stop": "done",
-    # Unverified: SessionEnd appears alongside SessionStart/SubagentStart/
-    # SubagentStop in the codex binary's own strings, so it plausibly exists
-    # as a real hook event, but this hasn't been confirmed by actually
-    # observing it fire on `/exit`. If slots still don't free on Codex exit
-    # after install-hooks, this is the first thing to check.
-    "SessionEnd": "empty",
-}
-CODEX_HOOK_EVENTS = ("UserPromptSubmit", "PermissionRequest", "PostToolUse", "Stop", "SessionEnd")
 
 
 def hook_status_for(family: str, event: str) -> str | None:

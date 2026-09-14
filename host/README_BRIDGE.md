@@ -65,7 +65,8 @@ board (JSON lines)         CLI lifecycle hooks (HTTP POST)
 
 | module | job |
 | --- | --- |
-| `model.py` | status vocabulary, effort mapping, hook status tables — pure data, no clock/I-O |
+| `model.py` | effort mapping, record shapes — pure data, no clock/I-O; re-exports the status vocabulary from `status_table.py` |
+| `status_table.py` | the status vocabulary: busy-ness, per-family hook mappings, LED color/pulse — generates `firmware/neokey/status_table.h` |
 | `events.py` | `BoardEvent`/`HookEvent`/`LivenessObserved`/`SlotRegistered`/`Shutdown`, `parse_board_line` |
 | `reducer.py` | `reduce(slots, state, event, now) -> (slots, effects)` — pure; every status-change rule lives here |
 | `clock.py` | `Clock` protocol + `SystemClock`/`FakeClock` |
@@ -81,15 +82,23 @@ board (JSON lines)         CLI lifecycle hooks (HTTP POST)
 
 ## Adding a status
 
-1. Add the status to `STATUS_CHOICES`/`BUSY_STATUSES` in `model.py` if it's new.
-2. Add its hook mapping to `CLAUDE_HOOK_STATUS`/`CODEX_HOOK_STATUS` (also in
-   `model.py`) if a lifecycle hook should produce it.
-3. Add its color/pulse to `firmware/neokey/led_model.h`'s `colorForStatus`.
-4. Run `host/.venv/bin/python -m pytest host/tests -q` and
-   `firmware/neokey/test/run.sh` — both must stay green.
+`host/switchboard/status_table.py`'s `STATUSES` table is the single source
+of truth — busy-ness, which hooks (per CLI family) produce it, and its LED
+color/pulse.
 
-(This is still multi-file for now; Phase 2.5's `status_table.py` collapses
-steps 1-3 into editing one table and running one generator command.)
+1. Add (or edit) a row in `STATUSES`.
+2. Regenerate the firmware header:
+   ```sh
+   python3 -m switchboard.status_table --emit-header > firmware/neokey/status_table.h
+   ```
+3. Run `host/.venv/bin/python -m pytest host/tests -q` and
+   `firmware/neokey/test/run.sh` — both must stay green.
+   (`test_status_table_header_is_current` fails with the exact command
+   above if you forget step 2.)
+
+`STATUS_CHOICES`, `BUSY_STATUSES`, `CLAUDE_HOOK_STATUS`, `CODEX_HOOK_STATUS`,
+and the hook-installer's matcher table all derive from this one table —
+nothing else needs editing by hand.
 
 ## Voice hold (Claude-only, needs a venv)
 

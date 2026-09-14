@@ -9,41 +9,13 @@
 #include <cmath>
 #include <cstring>
 
+#include "status_table.h"  // Status, statusFromString, statusIsBusy, colorForStatus,
+                            // staticPulseMsFor, SOFT_WHITE — generated, see that file's header comment
+
 #ifndef PI
 #define PI 3.14159265358979323846f
 #endif
 
-enum class Status : uint8_t {
-  Empty,
-  Launched,
-  Idle,
-  Thinking,
-  Working,
-  Waiting,
-  NeedsInput,
-  Blocked,
-  Done,
-  Unknown,
-};
-
-inline Status statusFromString(const char *s) {
-  if (strcmp(s, "empty") == 0) return Status::Empty;
-  if (strcmp(s, "launched") == 0) return Status::Launched;
-  if (strcmp(s, "idle") == 0) return Status::Idle;
-  if (strcmp(s, "thinking") == 0) return Status::Thinking;
-  if (strcmp(s, "working") == 0) return Status::Working;
-  if (strcmp(s, "waiting") == 0) return Status::Waiting;
-  if (strcmp(s, "needs_input") == 0) return Status::NeedsInput;
-  if (strcmp(s, "blocked") == 0) return Status::Blocked;
-  if (strcmp(s, "done") == 0) return Status::Done;
-  return Status::Unknown;
-}
-
-inline bool statusIsBusy(Status s) {
-  return s == Status::Thinking || s == Status::Working;
-}
-
-constexpr uint32_t SOFT_WHITE = 0x8C8C8C;  // launched + idle
 constexpr uint32_t BUSY_RAMP_MS = 300000;  // 5 min turn ramp
 constexpr float BUSY_START_HUE = 210.0f;   // cool blue
 constexpr float BUSY_END_HUE = 300.0f;     // magenta — never past 300 (into red)
@@ -106,37 +78,13 @@ inline unsigned long busyPulsePeriodMs(uint32_t elapsedMs) {
   return startMs - (unsigned long)((startMs - endMs) * t);
 }
 
-// 0 means "solid" (no pulse) to the caller.
+// 0 means "solid" (no pulse) to the caller. The static (non-busy) periods
+// come from status_table.h's generated staticPulseMsFor(); only the busy
+// ramp's own period (which needs elapsedMs, not a per-status constant)
+// stays hand-written here.
 inline unsigned long pulsePeriodFor(Status s, uint32_t elapsedMs) {
-  if (s == Status::NeedsInput) return 500UL;
-  if (s == Status::Unknown) return 3000UL;  // slow amber pulse: "bridge isn't sure"
   if (statusIsBusy(s)) return busyPulsePeriodMs(elapsedMs);
-  return 0UL;
-}
-
-// Static (non-busy) per-status colors. Busy statuses return SOFT_WHITE here;
-// callers use busyColor() for those instead, since the ramp needs elapsedMs.
-inline uint32_t colorForStatus(Status s) {
-  switch (s) {
-    case Status::Launched:
-    case Status::Idle:
-      return SOFT_WHITE;
-    case Status::Done:
-      return 0x00FF00;  // green
-    case Status::Waiting:
-    case Status::NeedsInput:
-      return 0xFFFF00;  // yellow: wants attention, not urgent
-    case Status::Blocked:
-      return 0xFF0000;  // red: something's actually wrong
-    case Status::Unknown:
-      return 0xFF8C00;  // amber: the bridge hasn't heard from this slot
-    case Status::Thinking:
-    case Status::Working:
-      return SOFT_WHITE;
-    case Status::Empty:
-    default:
-      return 0;
-  }
+  return staticPulseMsFor(s);
 }
 
 // Smooth raised-cosine breathing wave (0..1..0), floored at 0.35 so the pulse

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from switchboard.hooks_server import HOOK_HOST, HOOK_PATH_PREFIX, HOOK_PORT
-from switchboard.model import CODEX_HOOK_EVENTS
+from switchboard.status_table import CODEX_HOOK_EVENTS, HOOK_MATCHERS as CLAUDE_HOOK_EVENTS
 
 # Substring used to identify Switchboard's own entries in ~/.claude/settings.json
 # and $CODEX_HOME/hooks.json so re-installing (or another tool's installer) never
@@ -18,24 +18,12 @@ from switchboard.model import CODEX_HOOK_EVENTS
 # /hook/ markers, so all three can coexist.
 HOOK_MARKER = f"{HOOK_HOST}:{HOOK_PORT}{HOOK_PATH_PREFIX}"
 
-# Real lifecycle hook events, not screen-scraped guesses — see
-# https://github.com/stephenleo/OpenMicro, which validated this approach.
-# PreToolUse only fires for AskUserQuestion.
-CLAUDE_HOOK_EVENTS: dict[str, str | None] = {
-    "SessionStart": None,
-    "UserPromptSubmit": None,
-    "PreToolUse": "AskUserQuestion",
-    "PostToolUse": None,
-    "Notification": None,
-    "Stop": None,
-    "SessionEnd": None,
-    # Fire for every subagent (Task-tool) run, including ones dispatched to
-    # run in the background that outlive the main turn's Stop event — see
-    # the "active_subagents" handling in reducer._apply_hook_event, which
-    # is what these two exist to feed.
-    "SubagentStart": None,
-    "SubagentStop": None,
-}
+# CLAUDE_HOOK_EVENTS (which hooks to register, and each one's matcher) is
+# status_table.HOOK_MATCHERS now — the single source of truth. Fires for
+# every subagent (Task-tool) run too, including ones dispatched to run in
+# the background that outlive the main turn's Stop event — see the
+# "active_subagents" handling in reducer._apply_hook_event, which is what
+# SubagentStart/SubagentStop exist to feed.
 
 
 def _hook_command(event: str) -> str:
