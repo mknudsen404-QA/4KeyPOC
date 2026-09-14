@@ -294,17 +294,18 @@ for the display firmware can come later; it needs the toolchain cached.
 
 ## 5. User-facing improvements
 
-1. **Colors** (your spec): soft white on launch and idle; busy ramps white →
-   blue → magenta; never red unless `blocked`. `needs_input` becomes a yellow
-   *fast pulse* (design doc says flash; firmware is solid today) so it is
-   distinguishable from `waiting`. `done` green holds until the key is
-   pressed or the next prompt, then returns to soft white.
+1. **Colors** (your spec) — done, Phase 0/2.2. Soft white on launch and
+   idle; busy ramps white → blue → magenta; never red unless `blocked`.
+   `needs_input` is a yellow fast pulse (500 ms). `done` green holds until
+   the key is pressed or the next prompt (Phase 2.2), then returns to soft
+   white.
 2. **Selection visibility.** Non-selected keys are dimmed to 1/4 (ino:96);
    at 0x202020 that is `0x080808`, effectively off at brightness 40. Use a
    brightness floor, or show selection as a brief white blink on press.
-3. **Unknown state on the LED.** When liveness is `UNKNOWN` or the last
-   `agent.update` had no ack, show a slow amber pulse instead of holding a
-   stale color. Stale-but-confident is what caused today's confusion.
+3. **Unknown state on the LED** — done, Phase 2.3. Two consecutive UNKNOWN
+   liveness readings, or (Bridge-side only) 3 unacked `agent.update`
+   attempts, show a slow amber pulse instead of holding a stale color;
+   confirmed ALIVE or a fresh hook-driven update clears it.
 4. **Default working directory.** Today every slot defaults to the repo
    (`agent_config_for_slot`, bridge:224; `agents.example.json`; `setup.sh`
    rewrites `cwd` to the repo). Proposed:
@@ -318,14 +319,14 @@ for the display firmware can come later; it needs the toolchain cached.
      otherwise refuse with a clear message and a distinct LED blink.
    - Later: a `projects` list in `agents.json` and a key-hold gesture to cycle
      which project the slot opens in; the screen shows the folder name.
-5. **Ghost-tab cleanup.** When a slot is freed and its tab still exists with
-   no agent process, close the tab (opt-in flag) so Terminal doesn't fill
-   with `[Process completed]` windows.
-6. **Log rotation.** `host/logs/slot-1.log` is 213 KB after one session and
-   `read_log_tail` scans it every 2 s. Truncate on launch (already done) and
-   cap at a few MB, or drop the log tailing entirely now that hooks are the
-   primary signal — the only remaining pattern is `(y/n)`, which Claude
-   Code's hooks already cover via `Notification`.
+5. **Ghost-tab cleanup** — done, Phase 2.4. `--close-dead-tabs` (opt-in,
+   default off) closes a slot's Terminal tab when the reducer confirms its
+   process dead; never applied to `/exit` (SessionEnd), which frees the
+   slot but deliberately leaves the shell.
+6. **Log rotation — resolved by removal, Phase 0.** Log tailing (and
+   `host/logs/`) was deleted entirely rather than fixed: hooks are the
+   only status source now (see decisions, §7), so there is no log file
+   left to rotate or scan.
 7. **Bridge self-recovery.** On startup, reconcile the registry against
    live processes (free dead slots, push a full sync to the board) so a
    restart is always a clean state rather than inheriting a stale file.
@@ -360,10 +361,21 @@ for the display firmware can come later; it needs the toolchain cached.
 - `switchboard_bridge.py` is now a 7-line entry-point shim; 104 host tests
   green (was 52 after Phase 0).
 
-**Phase 2 — product polish**
-- `doctor`; default-cwd config and `config` command; done-fade;
-  `needs_input` pulse; unknown-state amber; ghost-tab cleanup; log cap.
-- Shared status table generating the C header.
+**Phase 2 — product polish — done, `0aff602`..`b965798`**
+- `doctor` (§2.1): probes the serial port, hook listener, hooks-installed
+  state, Terminal/Accessibility permissions, registry liveness,
+  agents.json cwds, and the LaunchAgent — nothing guessed from config.
+- `done` clears to idle on key press (§2.2, not fade — a discrete
+  transition on the press that brings the user back to that slot).
+- Unknown-state amber + ack tracking (§2.3): two consecutive UNKNOWN
+  liveness readings (or 3 unacked sends) pulse amber; a confirmed ALIVE
+  clears it.
+- Ghost-tab cleanup (§2.4): `--close-dead-tabs`, opt-in, never for
+  `/exit`.
+- Shared status table (§2.5): `status_table.py` generates
+  `firmware/neokey/status_table.h`; "adding a status" is one table edit +
+  one command.
+- default-cwd config and the `config` command shipped earlier, in Phase 0.5.
 
 ## 7. Decisions (resolved 2026-09-13)
 

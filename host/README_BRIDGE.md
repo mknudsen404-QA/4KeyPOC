@@ -77,6 +77,7 @@ board (JSON lines)         CLI lifecycle hooks (HTTP POST)
 | `launcher.py` | resolving a command/cwd/effort into a `LaunchPlan`, plus the `config` subcommand |
 | `hooks_server.py` | the hook HTTP listener — turns a POST into a `HookEvent`, nothing else |
 | `hooks_install.py` | registering hooks with Claude Code/Codex |
+| `doctor.py` | the `doctor` subcommand — probes the real environment, doesn't guess |
 | `bridge.py` | `Bridge` — owns the queue, the three producer threads, and `step()`/`startup_sync()` |
 | `cli.py` | `build_parser()` + every subcommand function; `main()` |
 
@@ -175,6 +176,20 @@ python3 host/switchboard_bridge.py listen \
   --auto-launch \
   --no-open
 ```
+
+Close a slot's Terminal tab too, not just free the slot, when its process
+is confirmed dead (default: off — the tab is left alone so its
+"[Process completed]" scrollback stays visible):
+
+```sh
+python3 host/switchboard_bridge.py listen \
+  --port /dev/cu.usbmodem2301 \
+  --auto-launch \
+  --close-dead-tabs
+```
+
+This never applies to `/exit` (SessionEnd) — the user asked for that
+shell to stay, and it does.
 
 ## Test without the board
 
@@ -293,6 +308,25 @@ already-open Terminal window won't pick up new hooks until restarted. See
 and its known gaps (credit to [OpenMicro](https://github.com/stephenleo/OpenMicro)
 for validating this approach).
 
+## Doctor
+
+`doctor` probes the bridge's actual operating environment — nothing here
+is guessed from config — and prints one `[ok]`/`[warn]`/`[fail] name:
+detail` line per check: the serial port, the hook HTTP listener, whether
+Claude Code/Codex hooks are installed and current, Terminal automation
+permission, Accessibility permission (needed for voice PTT), every
+registered slot's actual liveness, whether `agents.json`'s working
+directories exist or are creatable, and whether the LaunchAgent is loaded.
+
+```sh
+python3 host/switchboard_bridge.py doctor
+```
+
+Exits 1 if any check is `[fail]`. `--json` emits the same checks as a JSON
+array (`[{"name", "level", "detail"}, ...]`) instead of text lines, for
+scripting. `--port`, `--registry`, and `--agents-config` override what it
+probes, same as `listen`/`launch`.
+
 ## Track status
 
 The bridge registry now stores status, effort, and activity per slot.
@@ -343,6 +377,12 @@ Sent Agent 1 status to board
 Board applied update for Agent 1
 ```
 
+While the bridge is running (`listen`), every `agent.update` it sends is
+tracked until acked. If the board hasn't acked one within a second, the
+liveness ticker resends it — up to 3 attempts total — then gives up and
+logs `slot N: board did not ack after 3 attempts` rather than retrying
+forever.
+
 Current statuses:
 
 ```text
@@ -389,6 +429,13 @@ Development install that does not open Terminal windows:
 
 ```sh
 python3 host/install_bridge_launch_agent.py --no-open
+```
+
+Also close a slot's Terminal tab when its process is confirmed dead
+(default off, same as `listen --close-dead-tabs`):
+
+```sh
+python3 host/install_bridge_launch_agent.py --close-dead-tabs
 ```
 
 The LaunchAgent writes:

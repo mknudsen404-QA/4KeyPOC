@@ -483,9 +483,13 @@ Future rotary behavior:
 ## Agent Status Colors
 
 The screen, illuminated keys, and WS2812 LEDs use the same status language.
-Implemented in `firmware/neokey/led_model.h` as of Phase 0 (see
-`docs/design/phase0-implementation-spec.md` §6); the table below reflects
-that implementation, not an open proposal.
+Implemented in `firmware/neokey/led_model.h`; as of Phase 2.5 the table
+below is generated, not hand-maintained — its single source of truth is
+`host/switchboard/status_table.py`'s `STATUSES`, which also generates
+`firmware/neokey/status_table.h` (the `Status` enum, `colorForStatus`, and
+the static pulse table `led_model.h` builds on). Edit that one table and
+regenerate rather than editing this section or the header by hand — see
+`host/README_BRIDGE.md`'s "Adding a status".
 
 | Status | Color | Meaning |
 | --- | --- | --- |
@@ -494,7 +498,7 @@ that implementation, not an open proposal.
 | Thinking / Working (busy) | White -> blue -> magenta ramp, pulsing faster over the turn | Agent is actively working; color/pulse both escalate over the first ~5 minutes of the current turn, then hold at magenta/fast |
 | Waiting / Needs Input | Yellow, fast pulse (500 ms) | User decision or clarification required |
 | Blocked | Red, solid | Agent cannot proceed without intervention |
-| Done | Green, solid | Task/turn completed |
+| Done | Green, solid | Task/turn completed; clears to Idle the moment the key is pressed or the next prompt starts (Phase 2.2) |
 | Unknown | Amber, slow pulse (3000 ms) | The bridge hasn't heard from this slot recently — not a status the agent reports, a "we're not sure" signal from the board/bridge relationship itself |
 
 The busy ramp (`busyColor()` in `led_model.h`) measures the **current
@@ -504,9 +508,25 @@ from a previous turn's color. Non-selected keys are dimmed to 40% of their
 color (floored so a dim status never disappears entirely), selected keys are
 shown at full intensity.
 
+### The `liveness` field (Phase 2.3)
+
+`agent.update` carries an optional `liveness` field: `"alive"`, `"unknown"`,
+or omitted entirely (no news either way). It's orthogonal to `status` — a
+slot can report `"working"` and `"unknown"` liveness at the same time if
+the bridge can no longer confirm the process behind it is actually there
+(the terminal tab's `ps` probe came back inconclusive twice in a row).
+When `liveness: "unknown"` arrives, the key overrides *whatever* its
+current `status` would otherwise render and shows Unknown's amber pulse
+instead — the LED may be lying about `status`, so don't trust it until a
+confirmed `liveness: "alive"` (or a fresh hook-driven update, which only
+fires if the process is alive) clears it. This is Bridge-side bookkeeping
+only (`ReducerState.unknown_probes` in `reducer.py`); the firmware just
+renders whatever `liveness` value it's told (`slotUncertain[]` in
+`neokey.ino`, the `uncertain` parameter on `renderKey()`).
+
 Run `firmware/neokey/test/run.sh` to test this logic (colors, ramp, pulse
-timing) against a plain host C++ compiler, no board or Arduino toolchain
-required.
+timing, the uncertain override) against a plain host C++ compiler, no
+board or Arduino toolchain required.
 
 ## Command Keys
 
