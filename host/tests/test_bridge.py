@@ -8,7 +8,10 @@ from switchboard.registry import Registry
 from switchboard.terminal import FakeTerminal
 
 
-def make_bridge(tmp_path, *, clock=None, auto_launch=True, dry_run=False, no_open=False, launch_config=None):
+def make_bridge(
+    tmp_path, *, clock=None, auto_launch=True, dry_run=False, no_open=False, launch_config=None,
+    close_dead_tabs=False,
+):
     registry = Registry(tmp_path / "registry.json")
     device = FakeDevice()
     terminal = FakeTerminal()
@@ -24,6 +27,7 @@ def make_bridge(tmp_path, *, clock=None, auto_launch=True, dry_run=False, no_ope
         auto_launch=auto_launch,
         dry_run=dry_run,
         no_open=no_open,
+        close_dead_tabs=close_dead_tabs,
     )
     return bridge, registry, device, terminal, prober, clock
 
@@ -192,3 +196,29 @@ def test_pending_ack_not_yet_due_is_not_retried(tmp_path):
     clock.advance(0.5)  # under the 1s threshold
     bridge.retry_pending_acks()
     assert len(device.sent) == 1
+
+
+def test_close_dead_tabs_closes_terminal_when_enabled(tmp_path):
+    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path, close_dead_tabs=True)
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "status": "idle", "terminal_tty": "/dev/ttys001"}}})
+    prober.answers["1"] = Liveness.DEAD
+
+    from switchboard.events import LivenessObserved
+
+    bridge.step(LivenessObserved({"1": Liveness.DEAD}))
+    bridge.step(LivenessObserved({"1": Liveness.DEAD}))
+
+    assert terminal.closed == ["/dev/ttys001"]
+
+
+def test_close_dead_tabs_leaves_terminal_when_disabled(tmp_path):
+    bridge, registry, device, terminal, prober, clock = make_bridge(tmp_path, close_dead_tabs=False)
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "status": "idle", "terminal_tty": "/dev/ttys001"}}})
+
+    from switchboard.events import LivenessObserved
+
+    bridge.step(LivenessObserved({"1": Liveness.DEAD}))
+    bridge.step(LivenessObserved({"1": Liveness.DEAD}))
+
+    assert terminal.closed == []
+    assert "1" not in registry.load()["slots"]  # still freed either way

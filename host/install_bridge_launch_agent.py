@@ -37,6 +37,8 @@ def build_plist(args: argparse.Namespace) -> dict:
         program_arguments.extend(["--port", args.port])
     if args.no_open:
         program_arguments.append("--no-open")
+    if args.close_dead_tabs:
+        program_arguments.append("--close-dead-tabs")
 
     return {
         "Label": LABEL,
@@ -57,6 +59,10 @@ def main() -> int:
     parser.add_argument("--port", help="Pin bridge to a specific serial port")
     parser.add_argument("--retry-delay", type=float, default=2.0)
     parser.add_argument("--no-open", action="store_true", help="Register slots without opening Terminal")
+    parser.add_argument(
+        "--close-dead-tabs", action="store_true",
+        help="Close a slot's Terminal tab when its process is confirmed dead (default: leave it)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 

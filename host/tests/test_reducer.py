@@ -5,7 +5,7 @@ import pytest
 
 from switchboard import model
 from switchboard.events import BoardEvent, HookEvent, LivenessObserved, SlotRegistered
-from switchboard.reducer import Effect, Focus, Launch, ReducerState, SendUpdate, VoiceKey, reduce
+from switchboard.reducer import CloseTab, Effect, Focus, Launch, ReducerState, SendUpdate, VoiceKey, reduce
 
 NOW = 1_000_000
 
@@ -176,6 +176,30 @@ def test_liveness_observed_frees_after_two_consecutive_dead():
     slots, effects = reduce(slots, state, LivenessObserved({"1": model.Liveness.DEAD}), NOW, auto_launch=False)
     assert effects == [SendUpdate("1")]
     assert "1" not in slots
+
+
+def test_liveness_observed_dead_with_tty_emits_close_tab():
+    slots = {"1": {"slot": 1, "status": "idle", "terminal_tty": "/dev/ttys001"}}
+    state = ReducerState()
+    reduce(slots, state, LivenessObserved({"1": model.Liveness.DEAD}), NOW, auto_launch=False)
+    slots, effects = reduce(slots, state, LivenessObserved({"1": model.Liveness.DEAD}), NOW, auto_launch=False)
+    assert SendUpdate("1") in effects
+    assert CloseTab("/dev/ttys001") in effects
+
+
+def test_liveness_observed_dead_without_tty_emits_no_close_tab():
+    slots = {"1": {"slot": 1, "status": "idle"}}  # no terminal_tty (--no-open record)
+    state = ReducerState()
+    reduce(slots, state, LivenessObserved({"1": model.Liveness.DEAD}), NOW, auto_launch=False)
+    slots, effects = reduce(slots, state, LivenessObserved({"1": model.Liveness.DEAD}), NOW, auto_launch=False)
+    assert not any(isinstance(e, CloseTab) for e in effects)
+
+
+def test_session_end_never_emits_close_tab():
+    """The user typed /exit — the shell is still there on purpose."""
+    slots = {"1": make_record(status="working", terminal_tty="/dev/ttys001")}
+    slots, effects = do_hook(slots, "SessionEnd")
+    assert not any(isinstance(e, CloseTab) for e in effects)
 
 
 def test_liveness_observed_unknown_resets_dead_count():

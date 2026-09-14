@@ -205,6 +205,7 @@ def _make_bridge(args: argparse.Namespace, device):
         auto_launch=args.auto_launch,
         dry_run=args.dry_run,
         no_open=args.no_open,
+        close_dead_tabs=getattr(args, "close_dead_tabs", False),
     )
 
 
@@ -275,6 +276,10 @@ def _add_listen_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--launch-config", type=Path, default=DEFAULT_AGENTS_CONFIG, help="Agent launch config")
     parser.add_argument("--dry-run", action="store_true", help="Preview auto-launch actions without opening terminals or writing the registry")
     parser.add_argument("--no-open", action="store_true", help="Register auto-launched slots without opening Terminal")
+    parser.add_argument(
+        "--close-dead-tabs", action="store_true",
+        help="Close a slot's Terminal tab when its process is confirmed dead (default: leave it)",
+    )
     parser.add_argument("--retry", action="store_true", help="Keep waiting when the board is not connected yet")
     parser.add_argument("--retry-delay", type=float, default=2.0, help="Seconds between reconnect attempts")
 

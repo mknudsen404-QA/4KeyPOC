@@ -21,7 +21,7 @@ def test_listen_help_lists_each_flag_once(capsys):
 
     options_text = help_text.split("options:", 1)[1]
     for flag in ("--registry", "--port", "--baud", "--duration", "--sample", "--stdin", "--auto-launch",
-                 "--launch-config", "--dry-run", "--no-open", "--retry", "--retry-delay"):
+                 "--launch-config", "--dry-run", "--no-open", "--close-dead-tabs", "--retry", "--retry-delay"):
         occurrences = len(re.findall(r"(?<![\w-])" + re.escape(flag) + r"(?![\w-])", options_text))
         assert occurrences == 1, f"{flag} appears {occurrences} times in `listen --help`'s options"
 

@@ -46,6 +46,11 @@ class VoiceKey(Effect):
 
 
 @dataclass(frozen=True)
+class CloseTab(Effect):
+    tty: str  # close the Terminal tab at this tty (--close-dead-tabs only)
+
+
+@dataclass(frozen=True)
 class Log(Effect):
     message: str
 
@@ -230,8 +235,16 @@ def _reduce_liveness_observed(slots: dict[str, dict], state: ReducerState, event
                 state.dead_probes[slot_key] = count
                 continue
             state.dead_probes.pop(slot_key, None)
-            if slots.pop(slot_key, None) is not None:
+            freed = slots.pop(slot_key, None)
+            if freed is not None:
                 effects.append(SendUpdate(slot_key))
+                # Only a confirmed-dead process leaves behind a ghost tab
+                # worth closing — SessionEnd (the user typed /exit) frees
+                # the slot too, but the shell is still there on purpose and
+                # is handled separately, never via this path.
+                tty = freed.get("terminal_tty")
+                if tty:
+                    effects.append(CloseTab(tty))
             continue
 
         state.dead_probes.pop(slot_key, None)

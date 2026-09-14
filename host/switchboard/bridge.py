@@ -17,7 +17,7 @@ from switchboard.events import BoardEvent, Event, LivenessObserved, Shutdown, Sl
 from switchboard.hooks_server import HOOK_HOST, HOOK_PORT, start_hook_server
 from switchboard.launcher import build_launch
 from switchboard.liveness import ProcessProber
-from switchboard.reducer import Effect, Focus, Launch, Log, ReducerState, SendUpdate, VoiceKey, reduce
+from switchboard.reducer import CloseTab, Effect, Focus, Launch, Log, ReducerState, SendUpdate, VoiceKey, reduce
 from switchboard.registry import Registry
 from switchboard.terminal import TerminalDriver
 
@@ -44,6 +44,7 @@ class Bridge:
         auto_launch: bool,
         dry_run: bool,
         no_open: bool,
+        close_dead_tabs: bool = False,
         log: Callable[[str], None] = print,
     ) -> None:
         self.registry = registry
@@ -55,6 +56,7 @@ class Bridge:
         self.auto_launch = auto_launch
         self.dry_run = dry_run
         self.no_open = no_open
+        self.close_dead_tabs = close_dead_tabs
         self.log = log
         self.state = ReducerState()
         self._queue: "queue.Queue[Event]" = queue.Queue()
@@ -143,6 +145,9 @@ class Bridge:
             self.terminal.focus(effect.tty)
         elif isinstance(effect, VoiceKey):
             self.terminal.post_key(self.terminal.terminal_pid(), SPACE_KEYCODE, effect.down)
+        elif isinstance(effect, CloseTab):
+            if self.close_dead_tabs:
+                self.terminal.close(effect.tty)
         elif isinstance(effect, Log):
             self.log(effect.message)
 
