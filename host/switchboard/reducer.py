@@ -267,8 +267,22 @@ def _reduce_hook_event(slots: dict[str, dict], event: HookEvent, now: int) -> li
     record = slots.get(event.slot_key)
     if not record:
         return []
+    effects: list[Effect] = []
+    if event.name == "Notification":
+        # DIAGNOSTIC, not yet behavioral: Claude Code's Notification hook
+        # fires for more than "needs your permission" (confirmed live —
+        # an idle/suggested-next-prompt state also fires it), but every
+        # Notification currently maps straight to needs_input regardless
+        # of what it actually says — the "Notification-text matching" gap
+        # SWITCHBOARD_DESIGN.md already flags as unimplemented. Log the
+        # raw message so a real mapping can be calibrated from evidence
+        # instead of guessed at.
+        message = event.payload.get("message", "<no message field>")
+        effects.append(Log(f"slot {event.slot_key}: Notification fired: {message!r}"))
     dirty = _apply_hook_event(slots, event.slot_key, record, event.name, event.payload, now)
-    return [SendUpdate(event.slot_key)] if dirty else []
+    if dirty:
+        effects.append(SendUpdate(event.slot_key))
+    return effects
 
 
 def _apply_hook_event(slots: dict[str, dict], slot_key: str, record: dict, event: str, payload: dict, now: int) -> bool:

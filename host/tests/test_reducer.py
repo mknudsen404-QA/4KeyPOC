@@ -5,7 +5,7 @@ import pytest
 
 from switchboard import model
 from switchboard.events import BoardEvent, HookEvent, LivenessObserved, SlotRegistered
-from switchboard.reducer import CloseTab, Effect, Focus, Launch, ReducerState, SendUpdate, VoiceKey, reduce
+from switchboard.reducer import CloseTab, Effect, Focus, Launch, Log, ReducerState, SendUpdate, VoiceKey, reduce
 
 NOW = 1_000_000
 
@@ -41,6 +41,21 @@ def test_claude_event_table(event, expected_status):
         assert "1" not in slots
     else:
         assert slots["1"]["status"] == expected_status
+
+
+def test_notification_hook_logs_raw_message():
+    """Diagnostic-only for now (see SWITCHBOARD_DESIGN.md's "Notification-
+    text matching" known limitation): every Notification maps to
+    needs_input regardless of what it actually says, so the raw message
+    is logged for future calibration against real (not just "needs your
+    permission") Claude Code notifications."""
+    record = make_record(family="claude", status="idle")
+    slots = {"1": record}
+    slots, effects = do_hook(slots, "Notification", hook_body(message="Claude is waiting for your input"))
+    logs = [e for e in effects if isinstance(e, Log)]
+    assert len(logs) == 1
+    assert "Claude is waiting for your input" in logs[0].message
+    assert slots["1"]["status"] == "needs_input"  # behavior unchanged for now
 
 
 @pytest.mark.parametrize("event,expected_status", model.CODEX_HOOK_STATUS.items())
