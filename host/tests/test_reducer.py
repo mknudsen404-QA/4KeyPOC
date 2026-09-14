@@ -293,6 +293,28 @@ def test_effects_order_focus_before_send_update():
     assert kinds == [Focus, SendUpdate]
 
 
+def test_select_on_done_clears_to_idle():
+    """Plan §5.1: green (done) holds until the key is pressed."""
+    slots = {"1": make_record(status="done", terminal_tty="/dev/ttys001")}
+    state = ReducerState()
+    slots, effects = reduce(
+        slots, state, BoardEvent("agent.select", {"slot": 1, "liveness": "alive"}), NOW, auto_launch=False
+    )
+    assert slots["1"]["status"] == "idle"
+    assert SendUpdate("1") in effects
+
+
+def test_select_on_done_with_unknown_liveness_does_not_clear():
+    """Only a live re-selection (the user actually pressing the key on a
+    session that's still there) clears it — not a stale/unconfirmed probe."""
+    slots = {"1": make_record(status="done")}  # no terminal_tty -> unknown
+    state = ReducerState()
+    slots, effects = reduce(
+        slots, state, BoardEvent("agent.select", {"slot": 1, "liveness": "unknown"}), NOW, auto_launch=False
+    )
+    assert slots["1"]["status"] == "done"
+
+
 def test_reasoning_apply_sets_effort_only():
     slots = {"1": make_record(status="working", busy_since=NOW - 10)}
     state = ReducerState()

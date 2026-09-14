@@ -1,0 +1,6 @@
+{"t": 0, "board": {"event": "agent.select", "slot": 1}}
+{"t": 1, "hook": {"slot": 1, "event": "SessionStart", "body": {"session_id": "s-1"}}}
+{"t": 2, "hook": {"slot": 1, "event": "UserPromptSubmit", "body": {"session_id": "s-1"}}}
+{"t": 10, "hook": {"slot": 1, "event": "Stop", "body": {"session_id": "s-1"}}}
+{"t": 20, "liveness": {"1": "alive"}}
+{"t": 21, "board": {"event": "agent.select", "slot": 1}}

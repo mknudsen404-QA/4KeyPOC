@@ -84,7 +84,7 @@ def _reduce_board_event(
     name = event.name
 
     if name == "agent.select":
-        return _handle_select(slots, state, payload, auto_launch=auto_launch)
+        return _handle_select(slots, state, payload, now, auto_launch=auto_launch)
     if name == "agent.update.ack":
         return [Log(f"Board applied update for Agent {payload.get('slot')}")]
     if name == "agent.focus":
@@ -112,7 +112,7 @@ def _reduce_board_event(
 
 
 def _handle_select(
-    slots: dict[str, dict], state: ReducerState, payload: dict, *, auto_launch: bool
+    slots: dict[str, dict], state: ReducerState, payload: dict, now: int, *, auto_launch: bool
 ) -> list[Effect]:
     slot = int(payload.get("slot", 0)) or None
     state.selected_slot = slot
@@ -139,6 +139,11 @@ def _handle_select(
 
         # ALIVE or UNKNOWN: not dead, so reset the dead-probe count.
         state.dead_probes.pop(slot_key, None)
+        if liveness != "unknown" and existing.get("status") == "done":
+            # Plan §5.1: green (done) holds until the key is pressed or the
+            # next prompt starts a new turn — the press that brought the
+            # user back to this slot clears it now.
+            set_status(existing, "idle", now)
         tty = existing.get("terminal_tty")
         effects = [Focus(tty)] if tty else []
         effects.append(SendUpdate(slot_key))
