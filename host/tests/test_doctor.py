@@ -1,6 +1,7 @@
 import argparse
 import json
 import subprocess
+from pathlib import Path
 
 from switchboard import doctor
 from switchboard.liveness import FakeProber
@@ -57,6 +58,84 @@ def test_check_serial_port_other_oserror(monkeypatch):
     monkeypatch.setattr(doctor, "SerialDevice", raise_oserror)
     check = doctor.check_serial_port("/dev/cu.fake")
     assert check.level == "fail"
+
+
+class FakeLineDevice:
+    """Fake SerialDevice for check_firmware_identity: yields a fixed set
+    of lines instead of actually reading a port."""
+
+    def __init__(self, lines):
+        self._lines = lines
+
+    def lines(self, duration=None):
+        return iter(self._lines)
+
+    def close(self):
+        pass
+
+
+def test_check_firmware_identity_no_port(monkeypatch):
+    monkeypatch.setattr(doctor, "find_default_port", lambda: None)
+    check = doctor.check_firmware_identity(None)
+    assert check.level == "warn"
+    assert "unplugged" in check.detail
+
+
+def test_check_firmware_identity_switchbd_volume_mounted(monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor, "Path", lambda p: tmp_path)
+    check = doctor.check_firmware_identity("/dev/cu.fake")
+    assert check.level == "fail"
+    assert "msc_cdc_spike" in check.detail
+
+
+def test_check_firmware_identity_neokey_boot_line_ok(monkeypatch):
+    monkeypatch.setattr(doctor, "Path", lambda p: Path("/nonexistent"))
+    line = json.dumps({"event": "boot", "stage": "start", "firmware": "neokey", "build": "Sep 14 2026 00:00:00"})
+    monkeypatch.setattr(doctor, "SerialDevice", lambda port, baud: FakeLineDevice([line]))
+    check = doctor.check_firmware_identity("/dev/cu.fake")
+    assert check.level == "ok"
+    assert "neokey" in check.detail
+    assert "Sep 14 2026 00:00:00" in check.detail
+
+
+def test_check_firmware_identity_wrong_firmware_boot_line_fails(monkeypatch):
+    monkeypatch.setattr(doctor, "Path", lambda p: Path("/nonexistent"))
+    line = json.dumps({"event": "boot", "stage": "ping", "firmware": "msc_cdc_spike", "build": "x"})
+    monkeypatch.setattr(doctor, "SerialDevice", lambda port, baud: FakeLineDevice([line]))
+    check = doctor.check_firmware_identity("/dev/cu.fake")
+    assert check.level == "fail"
+    assert "msc_cdc_spike" in check.detail
+
+
+def test_check_firmware_identity_no_boot_line_warns_not_fails(monkeypatch):
+    monkeypatch.setattr(doctor, "Path", lambda p: Path("/nonexistent"))
+    monkeypatch.setattr(doctor, "SerialDevice", lambda port, baud: FakeLineDevice([]))
+    check = doctor.check_firmware_identity("/dev/cu.fake")
+    assert check.level == "warn"
+    assert "no boot line" in check.detail
+
+
+def test_check_firmware_identity_ignores_non_boot_lines(monkeypatch):
+    monkeypatch.setattr(doctor, "Path", lambda p: Path("/nonexistent"))
+    lines = [
+        "log noise, not json",
+        json.dumps({"event": "agent.select", "slot": 1}),
+        json.dumps({"event": "boot", "stage": "ready", "firmware": "neokey", "attempts": 0}),
+    ]
+    monkeypatch.setattr(doctor, "SerialDevice", lambda port, baud: FakeLineDevice(lines))
+    check = doctor.check_firmware_identity("/dev/cu.fake")
+    assert check.level == "ok"
+
+
+def test_check_firmware_identity_port_open_failure_warns(monkeypatch):
+    monkeypatch.setattr(doctor, "Path", lambda p: Path("/nonexistent"))
+
+    def raise_oserror(port, baud):
+        raise OSError("no such device")
+
+    monkeypatch.setattr(doctor, "SerialDevice", raise_oserror)
+    check = doctor.check_firmware_identity("/dev/cu.fake")
+    assert check.level == "warn"
 
 
 def test_check_hook_port_listening_and_loaded(monkeypatch):

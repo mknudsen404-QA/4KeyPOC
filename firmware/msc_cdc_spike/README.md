@@ -62,11 +62,22 @@ there's no CDC in bootloader mode).
 
 ## What to check once flashed
 
-- Board enumerates and a serial monitor (or `arduino-cli monitor`) shows
-  the periodic "CDC alive, MSC volume mounted alongside it" ping.
+- Board enumerates and a serial monitor (or `arduino-cli monitor`) shows a
+  `{"event":"boot","stage":"ping","firmware":"msc_cdc_spike","build":"..."}`
+  line every 2s.
+- `system_profiler SPUSBDataType` shows product revision "spike" on the
+  device (`MSC.productRevision("spike")`).
 - A "SWITCHBD" volume appears in Finder containing
   `Install Switchboard.command`.
 - Since the bridge is presumably already installed on your dev Mac,
   double-clicking that file is safe to test live — it detects the
   existing `~/Library/LaunchAgents/com.switchboard.bridge.plist` and just
   shows an "already installed" dialog, no clone, no changes.
+
+## If your keys are dead and a SWITCHBD drive appears
+
+You are on this spike, not `firmware/neokey`. Dark, unresponsive keys with
+a power LED is this spike's expected behavior — it deliberately contains
+no NeoKey/seesaw code. Reflash `firmware/neokey`; see
+`docs/design/wrong-firmware-recovery-plan.md` for the full recovery
+procedure.

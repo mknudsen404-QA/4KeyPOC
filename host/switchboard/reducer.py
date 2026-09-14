@@ -95,8 +95,22 @@ def _reduce_board_event(
     if name == "agent.update.ack":
         return [Log(f"Board applied update for Agent {payload.get('slot')}")]
     if name == "boot":
+        firmware = payload.get("firmware")
+        if firmware and firmware != "neokey":
+            # The spike (or anything else) identifying itself is exactly
+            # the failure mode docs/design/wrong-firmware-recovery-plan.md
+            # exists for — a wrong-firmware board otherwise looks identical
+            # to a dead one. Log loudly but keep running: this is
+            # informational, not a reason to stop the bridge.
+            return [
+                Log(
+                    f"Board boot: WRONG FIRMWARE — board is running {firmware!r}, "
+                    "not neokey. Reflash firmware/neokey "
+                    "(see docs/design/wrong-firmware-recovery-plan.md)."
+                )
+            ]
         return [
-            Log(f"Board boot: {payload.get('stage')} firmware={payload.get('firmware')} build={payload.get('build')}")
+            Log(f"Board boot: {payload.get('stage')} firmware={firmware} build={payload.get('build')}")
         ]
     if name == "error":
         return [Log(f"Board error: {payload.get('reason')} (attempt {payload.get('attempt')}) — power-cycle the board")]

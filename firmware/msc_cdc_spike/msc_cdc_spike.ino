@@ -58,7 +58,7 @@ void setup() {
 
   MSC.vendorID("Switchbd");
   MSC.productID("Installer");
-  MSC.productRevision("1.0");
+  MSC.productRevision("spike");
   MSC.onRead(onRead);
   MSC.onWrite(onWrite);
   MSC.onStartStop(onStartStop);
@@ -70,12 +70,15 @@ void setup() {
 }
 
 void loop() {
-  // Proves CDC keeps working normally with MSC active alongside it —
-  // this is the whole point of the spike.
+  // Proves CDC keeps working normally with MSC active alongside it — this
+  // is the whole point of the spike. JSON-shaped and self-identifying so
+  // the bridge/doctor can tell this apart from firmware/neokey instead of
+  // ignoring it as log text (see host/switchboard/doctor.py
+  // check_firmware_identity and docs/design/wrong-firmware-recovery-plan.md).
   if (millis() - lastPing > 2000) {
     lastPing = millis();
     if (Serial) {
-      Serial.println("CDC alive, MSC volume mounted alongside it");
+      Serial.println("{\"event\":\"boot\",\"stage\":\"ping\",\"firmware\":\"msc_cdc_spike\",\"build\":\"" __DATE__ " " __TIME__ "\"}");
     }
   }
 }

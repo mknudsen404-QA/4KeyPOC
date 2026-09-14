@@ -8,6 +8,7 @@ check's level is "fail".
 from __future__ import annotations
 
 import errno
+import json
 import os
 import socket
 import subprocess
@@ -61,6 +62,54 @@ def check_serial_port(port: str | None) -> DoctorCheck:
         return DoctorCheck("serial port", "fail", f"{resolved}: {exc}")
     device.close()
     return DoctorCheck("serial port", "ok", resolved)
+
+
+_WRONG_FIRMWARE_HINT = "see docs/design/wrong-firmware-recovery-plan.md"
+
+
+def check_firmware_identity(port: str | None) -> DoctorCheck:
+    """Distinguish "board is running firmware/neokey" from "board is
+    running the msc_cdc_spike" (or something else entirely) from outside,
+    the same distinction a human with a serial monitor has to make by hand
+    otherwise. See the "boot" event both sketches emit (Phase 3/4 of
+    docs/design/wrong-firmware-recovery-plan.md).
+    """
+    resolved = port or find_default_port()
+    if not resolved:
+        return DoctorCheck("firmware identity", "warn", "no USB serial port found (board unplugged?)")
+    if Path("/Volumes/SWITCHBD").exists():
+        return DoctorCheck(
+            "firmware identity", "fail", f"Board is running msc_cdc_spike — reflash firmware/neokey ({_WRONG_FIRMWARE_HINT})"
+        )
+    try:
+        device = SerialDevice(resolved, 115200)
+    except (RuntimeError, OSError) as exc:
+        return DoctorCheck("firmware identity", "warn", f"could not open {resolved}: {exc}")
+    try:
+        for line in device.lines(duration=3.0):
+            if not line.startswith("{"):
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if data.get("event") != "boot":
+                continue
+            firmware = data.get("firmware")
+            if firmware == "neokey":
+                build = data.get("build", "")
+                return DoctorCheck("firmware identity", "ok", f"neokey (build {build})" if build else "neokey")
+            return DoctorCheck(
+                "firmware identity", "fail", f"Board is running {firmware} — reflash firmware/neokey ({_WRONG_FIRMWARE_HINT})"
+            )
+        # Boot lines are only emitted at power-up; a board that's already
+        # been running for a while will be silent here. That's not a
+        # failure — it just means we can't confirm identity right now.
+        return DoctorCheck(
+            "firmware identity", "warn", "no boot line seen; board may be mid-boot or running pre-2026-09-14 firmware"
+        )
+    finally:
+        device.close()
 
 
 def check_hook_port(launchagent_loaded: bool) -> DoctorCheck:
@@ -164,6 +213,7 @@ def run_checks(*, port: str | None, registry_path: Path, agents_config_path: Pat
     launchagent = check_launchagent()
     return [
         check_serial_port(port),
+        check_firmware_identity(port),
         check_hook_port(launchagent.level == "ok"),
         check_claude_hooks(),
         check_codex_hooks(),

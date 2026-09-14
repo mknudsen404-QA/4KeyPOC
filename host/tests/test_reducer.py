@@ -350,9 +350,10 @@ def test_error_event_logs_reason_and_attempt():
     assert slots == {}
 
 
-def test_boot_event_from_unrecognized_firmware_still_logs():
-    """The spike's boot lines (Phase 4) flow through the same handler; the
-    reducer itself doesn't gate on firmware name — that's doctor's job."""
+def test_boot_event_from_wrong_firmware_logs_loudly_and_does_not_crash():
+    """The spike's boot lines (Phase 4) flow through the same handler and
+    must not raise — the bridge keeps running, just with a loud log line
+    pointing at the recovery doc."""
     slots = {}
     state = ReducerState()
     slots, effects = reduce(
@@ -362,7 +363,11 @@ def test_boot_event_from_unrecognized_firmware_still_logs():
         NOW,
         auto_launch=False,
     )
-    assert effects == [Log("Board boot: ping firmware=msc_cdc_spike build=Sep 14 2026 00:00:00")]
+    assert len(effects) == 1
+    assert isinstance(effects[0], Log)
+    assert "WRONG FIRMWARE" in effects[0].message
+    assert "msc_cdc_spike" in effects[0].message
+    assert slots == {}
 
 
 # ---- New: select/liveness interaction -----------------------------------
