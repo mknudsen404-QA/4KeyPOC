@@ -17,6 +17,7 @@ from pathlib import Path
 from switchboard.clock import SystemClock
 from switchboard.device import FdDevice, FileDevice, SerialDevice, find_default_port, sync_device
 from switchboard.doctor import doctor_command
+from switchboard.families import DEFAULT_FAMILY
 from switchboard.hooks_install import install_hooks
 from switchboard.key_injector import FakeKeyInjector, RepeatingKeyInjector, macos_key_repeat_timing
 from switchboard.launcher import (
@@ -129,9 +130,9 @@ def _launch_slot_from_config(*, slot: int, config: dict | None, registry_path: P
     child = argparse.Namespace(
         slot=slot,
         name=agent.get("name", f"Agent {slot}"),
-        family=agent.get("family", "codex"),
+        family=agent.get("family", DEFAULT_FAMILY),
         cwd=resolve_agent_cwd(agent, config),
-        command=agent.get("command", "codex"),
+        command=agent.get("command", DEFAULT_FAMILY),
         title=agent.get("title"),
         effort=agent.get("effort", "medium"),
         registry=registry_path,
@@ -316,11 +317,12 @@ def build_parser() -> argparse.ArgumentParser:
     launch_parser.add_argument("--slot", type=int, required=True)
     launch_parser.add_argument("--name", required=True)
     launch_parser.add_argument(
-        "--family", default="codex", choices=("codex", "claude", "shell"),
-        help="'shell' is a no-cost test family (no effort flags added) for a harmless command like cat",
+        "--family", default=DEFAULT_FAMILY,
+        help="A registered family name (e.g. codex, claude) or any other string, "
+        "which falls back to the generic tier (no effort flags, no hooks)",
     )
     launch_parser.add_argument("--cwd", default=DEFAULT_CWD)
-    launch_parser.add_argument("--command", default="codex")
+    launch_parser.add_argument("--command", default=DEFAULT_FAMILY)
     launch_parser.add_argument("--title")
     launch_parser.add_argument("--effort", default="medium", help="low, medium, high, xhigh, or max")
     launch_parser.add_argument("--dry-run", action="store_true")
@@ -356,7 +358,7 @@ def build_parser() -> argparse.ArgumentParser:
     config_parser.add_argument("--slot", type=int)
     config_parser.add_argument("--cwd")
     config_parser.add_argument("--name")
-    config_parser.add_argument("--family", choices=("codex", "claude", "shell"))
+    config_parser.add_argument("--family", help="A registered family name or any other string (generic tier)")
     config_parser.add_argument("--command")
     config_parser.add_argument("--effort", help="low, medium, high, xhigh, or max")
     config_parser.add_argument("--default-cwd")

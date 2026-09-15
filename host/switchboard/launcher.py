@@ -13,6 +13,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from switchboard.families import DEFAULT_FAMILY
+from switchboard.families import registry as family_registry
 from switchboard.model import command_with_effort, normalize_effort
 
 HOST_DIR = Path(__file__).resolve().parent.parent
@@ -26,16 +28,9 @@ DEFAULT_AGENTS_CONFIG = USER_AGENTS_CONFIG if USER_AGENTS_CONFIG.exists() else E
 
 DEFAULT_CWD = "~/Documents"
 
-KNOWN_COMMAND_PATHS = {
-    "codex": [
-        "/Applications/ChatGPT.app/Contents/Resources/codex",
-    ],
-    "claude": [
-        str(Path.home() / ".local/bin/claude"),
-        "/opt/homebrew/bin/claude",
-        "/usr/local/bin/claude",
-    ],
-}
+# Per-family fallback binary paths (used when the command isn't on PATH),
+# sourced from each family's own profile — see switchboard/families/.
+KNOWN_COMMAND_PATHS = family_registry.known_paths_map()
 
 
 def load_agents_config(path: Path) -> dict:
@@ -57,8 +52,8 @@ def agent_config_for_slot(config: dict | None, slot: int) -> dict:
     return {
         "slot": slot,
         "name": f"Agent {slot}",
-        "family": "codex",
-        "command": "codex",
+        "family": DEFAULT_FAMILY,
+        "command": DEFAULT_FAMILY,
     }
 
 
@@ -195,7 +190,7 @@ def config_command(args) -> int:
     _write_agents_config(agents_config_path, config)
     print(
         f"Slot {args.slot}: {agent.get('name', f'Agent {args.slot}')} "
-        f"({agent.get('family', 'codex')}) command={agent.get('command', 'codex')!r} "
+        f"({agent.get('family', DEFAULT_FAMILY)}) command={agent.get('command', DEFAULT_FAMILY)!r} "
         f"cwd={resolve_agent_cwd(agent, config)}"
     )
     print("Takes effect on this slot's next launch.")
@@ -221,10 +216,23 @@ def build_launch(
         agent = {**agent, **{k: v for k, v in overrides.items() if v is not None}}
 
     name = agent.get("name", f"Agent {slot}")
-    family = agent.get("family", "codex")
+    command_field = agent.get("command", DEFAULT_FAMILY)
+    if "family" in agent:
+        family = agent["family"]
+    else:
+        # No explicit family: infer it from the command's basename rather
+        # than silently defaulting to Codex's family — a slot configured
+        # with command: gemini and no family used to get Codex's effort flags.
+        family = family_registry.infer(command_field)
+        if family != DEFAULT_FAMILY:
+            print(
+                f"Slot {slot}: no 'family' set for command {command_field!r}; inferred '{family}'. "
+                "Set 'family' explicitly in agents.json to silence this.",
+                file=sys.stderr,
+            )
     cwd = validate_or_create_cwd(resolve_agent_cwd(agent, config))
     effort_value = normalize_effort(effort if effort is not None else agent.get("effort"))
-    base_command = resolve_command(agent.get("command", "codex"))
+    base_command = resolve_command(command_field)
     command = command_with_effort(base_command, family, effort_value)
     title = agent.get("title") or f"Switchboard A{slot} {name}"
     shell_command = terminal_command(cwd, command, title, slot=slot)

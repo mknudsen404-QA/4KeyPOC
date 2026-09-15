@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from switchboard.device import SerialDevice, find_default_port
+from switchboard.families import registry as family_registry
 from switchboard.hooks_install import install_claude_hooks, install_codex_hooks
 from switchboard.hooks_server import HOOK_HOST, HOOK_PORT
 from switchboard.launcher import load_agents_config, resolve_agent_cwd
@@ -199,6 +200,25 @@ def check_agents_config(agents_config_path: Path) -> DoctorCheck:
     return DoctorCheck("agents.json", "fail", "; ".join(problems))
 
 
+def check_families(agents_config_path: Path) -> DoctorCheck:
+    """For each family a slot actually references (explicit or inferred
+    from its command), report whether the CLI is found on this machine
+    and its support tier — Phase 1.5 of the family-parity plan."""
+    config = load_agents_config(agents_config_path)
+    names = {agent.get("family") or family_registry.infer(agent.get("command")) for agent in config.get("agents", [])}
+    if not names:
+        return DoctorCheck("families", "ok", "no slots configured")
+    details = []
+    any_missing = False
+    for name in sorted(names):
+        profile = family_registry.get(name)
+        detection = profile.detect()
+        tier = profile.capabilities().tier
+        details.append(f"{name}: {'found' if detection.found else 'not found'} ({tier})")
+        any_missing = any_missing or not detection.found
+    return DoctorCheck("families", "warn" if any_missing else "ok", "; ".join(details))
+
+
 def check_launchagent() -> DoctorCheck:
     result = subprocess.run(
         ["launchctl", "print", f"gui/{os.getuid()}/{LAUNCH_AGENT_LABEL}"],
@@ -221,6 +241,7 @@ def run_checks(*, port: str | None, registry_path: Path, agents_config_path: Pat
         check_accessibility(),
         check_registry(registry_path),
         check_agents_config(agents_config_path),
+        check_families(agents_config_path),
         launchagent,
     ]
 

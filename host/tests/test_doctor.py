@@ -292,6 +292,34 @@ def test_check_agents_config_missing_cwd_outside_documents(tmp_path, monkeypatch
     assert check.level == "fail"
 
 
+def test_check_families_no_slots(tmp_path):
+    config_path = tmp_path / "agents.json"
+    config_path.write_text(json.dumps({"agents": []}))
+    check = doctor.check_families(config_path)
+    assert check.level == "ok"
+    assert "no slots" in check.detail
+
+
+def test_check_families_known_family_reports_tier(tmp_path, monkeypatch):
+    from switchboard.families.base import Detection
+    from switchboard.families.codex import CodexProfile
+
+    config_path = tmp_path / "agents.json"
+    config_path.write_text(json.dumps({"agents": [{"slot": 1, "family": "codex"}]}))
+    monkeypatch.setattr(CodexProfile, "detect", lambda self: Detection(True, "/usr/bin/codex"))
+    check = doctor.check_families(config_path)
+    assert "codex: found (status)" in check.detail
+    assert check.level == "ok"
+
+
+def test_check_families_missing_binary_warns(tmp_path):
+    config_path = tmp_path / "agents.json"
+    config_path.write_text(json.dumps({"agents": [{"slot": 1, "command": "definitely-not-a-real-binary-xyz"}]}))
+    check = doctor.check_families(config_path)
+    assert check.level == "warn"
+    assert "generic: not found (launch_only)" in check.detail
+
+
 def test_check_launchagent_loaded(monkeypatch):
     monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **k: fake_result(0))
     assert doctor.check_launchagent().level == "ok"

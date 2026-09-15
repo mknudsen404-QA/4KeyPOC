@@ -11,6 +11,7 @@ from __future__ import annotations
 import enum
 import shlex
 
+from switchboard.families import registry as family_registry
 from switchboard.status_table import BUSY_STATUSES, CLAUDE_HOOK_STATUS, CODEX_HOOK_EVENTS, CODEX_HOOK_STATUS, STATUS_CHOICES
 
 # STATUS_CHOICES/BUSY_STATUSES/CLAUDE_HOOK_STATUS/CODEX_HOOK_STATUS/
@@ -21,16 +22,8 @@ from switchboard.status_table import BUSY_STATUSES, CLAUDE_HOOK_STATUS, CODEX_HO
 
 # The device's effort dial sends LOW/MED/HIGH/XHIGH/MAX (lowercased by the
 # bridge before storage). Neither CLI's effort vocabulary matches ours
-# exactly, so normalize first, then map per family.
+# exactly, so normalize first, then ask the family's profile to map it.
 EFFORT_ALIASES = {"med": "medium"}
-CLAUDE_EFFORT_VALUES = {"low", "medium", "high", "xhigh", "max"}
-# codex's `-c model_reasoning_effort=` only has "low" confirmed against a real
-# config.toml on this machine; medium/high are the standard OpenAI tiers and
-# very likely valid, but xhigh/max are not confirmed for this specific key
-# (a different key, multi_agent_reasoning_effort, does accept "xhigh") so they
-# are clamped to "high" rather than risk passing an unrecognized value at
-# launch. Revisit once a real codex session confirms the top tiers.
-CODEX_EFFORT_MAP = {"low": "low", "medium": "medium", "high": "high", "xhigh": "high", "max": "high"}
 
 
 def normalize_effort(effort: str | None) -> str:
@@ -40,13 +33,7 @@ def normalize_effort(effort: str | None) -> str:
 
 def effort_args(family: str, effort: str | None) -> list[str]:
     normalized = normalize_effort(effort)
-    if family == "claude":
-        value = normalized if normalized in CLAUDE_EFFORT_VALUES else "medium"
-        return ["--effort", value]
-    if family == "codex":
-        value = CODEX_EFFORT_MAP.get(normalized, "medium")
-        return ["-c", f"model_reasoning_effort={value}"]
-    return []
+    return family_registry.get(family).effort_args(normalized)
 
 
 def command_with_effort(base_command: str, family: str, effort: str | None) -> str:
@@ -134,8 +121,4 @@ def agent_update_event(record: dict, now: float, *, liveness: str | None = None)
 
 
 def hook_status_for(family: str, event: str) -> str | None:
-    if family == "claude":
-        return CLAUDE_HOOK_STATUS.get(event)
-    if family == "codex":
-        return CODEX_HOOK_STATUS.get(event)
-    return None
+    return family_registry.get(family).hook_status_for(event)

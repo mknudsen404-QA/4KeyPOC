@@ -94,3 +94,27 @@ def test_build_launch_overrides_win_over_config(monkeypatch, tmp_path):
     assert plan.record_fields["name"] == "Custom"
     assert plan.record_fields["family"] == "shell"
     assert plan.record_fields["command"] == "/usr/bin/cat"
+
+
+def test_build_launch_infers_family_from_command_when_omitted(monkeypatch, tmp_path):
+    """A slot configured with a command but no family used to silently
+    default to "codex" (and get Codex's effort flags). It should now infer
+    from the command's basename instead — "generic" for anything unknown."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "Documents").mkdir()
+    monkeypatch.setattr(launcher, "resolve_command", lambda cmd: f"/usr/bin/{cmd}")
+
+    config = {"agents": [{"slot": 1, "name": "Foo", "command": "gemini"}]}
+    plan = launcher.build_launch(1, config)
+    assert plan.record_fields["family"] == "generic"
+    assert plan.record_fields["command"] == "/usr/bin/gemini"
+
+
+def test_build_launch_infers_claude_family_from_known_command(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "Documents").mkdir()
+    monkeypatch.setattr(launcher, "resolve_command", lambda cmd: f"/usr/bin/{cmd}")
+
+    config = {"agents": [{"slot": 1, "name": "Foo", "command": "claude"}]}
+    plan = launcher.build_launch(1, config)
+    assert plan.record_fields["family"] == "claude"
