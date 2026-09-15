@@ -44,12 +44,14 @@ EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
 VOICE_PROVIDERS = ("claude_native", "hotkey", "none")
 VOICE_MODES = ("hold", "toggle")
 
-# Today's board: 4 stable onboard agent keys (see README_BRIDGE.md "four
-# stable agent slots"), not the plan's aspirational "1-3 + a dedicated PTT
-# key 4" — that hasn't shipped in firmware. Matches cli.py's own launch
-# range check.
+# Today's board: 3 stable onboard agent keys — firmware/neokey/neokey.ino's
+# AGENT_SLOTS = {1, 2, 3}. The 4th physical key (PTT_KEY_INDEX) is a
+# dedicated push-to-talk button, not a 4th agent slot: it has no family or
+# command of its own, it just drives voice.hold.start/stop for whichever
+# agent slot is currently selected — which is why `voice` lives as a field
+# *on* each agent slot above, not as a separate slot 4.
 MIN_SLOT = 1
-MAX_SLOT = 4
+MAX_SLOT = 3
 
 
 @dataclass(frozen=True)
@@ -76,13 +78,25 @@ def empty_document() -> dict:
 
 def migrate_v1_to_v2(doc: dict) -> dict:
     """`agents` -> `slots`; `title` dropped (regenerated); everything else
-    carried as-is. Never mutates `doc`."""
+    carried as-is. Never mutates `doc`.
+
+    A legacy agent whose slot number is outside MIN_SLOT..MAX_SLOT is
+    dropped rather than carried forward: some existing agents.json files
+    predate the fix that confirmed only 3 physical keys are real agent
+    slots (the 4th is a dedicated PTT button — see MAX_SLOT's comment)
+    and configure a "slot 4" that firmware has never actually launched.
+    Carrying it into v2 would make every future save() fail validation
+    until the user noticed and removed it by hand.
+    """
     defaults = dict(doc.get("defaults", {}))
     slots = []
     for agent in doc.get("agents", []):
         if not isinstance(agent, dict) or "slot" not in agent:
             continue
-        slot_doc: dict = {"slot": agent["slot"]}
+        number = agent["slot"]
+        if isinstance(number, int) and not (MIN_SLOT <= number <= MAX_SLOT):
+            continue
+        slot_doc: dict = {"slot": number}
         for key in ("name", "family", "command", "cwd", "effort"):
             if agent.get(key) is not None:
                 slot_doc[key] = agent[key]

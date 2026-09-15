@@ -151,13 +151,16 @@ class Bridge:
 
     def startup_sync(self) -> None:
         """Reconcile (a single DEAD reading frees, since nothing has been
-        running yet) then push every slot 1..4's status to the board — a
+        running yet) then push every agent slot's status to the board — a
         bridge restart always leaves the LEDs in a clean, correct state
-        instead of whatever they last showed.
+        instead of whatever they last showed. Only slots 1-3 are real
+        agent keys (firmware/neokey/neokey.ino's AGENT_SLOTS); the 4th
+        physical key is push-to-talk, not a slot, so it isn't part of
+        this loop.
 
         Applies the freeing via `reduce` directly (inside one transaction)
         rather than through `step`, discarding its SendUpdate effects: the
-        unconditional 1..4 loop below already covers every freed slot, so
+        unconditional loop below already covers every freed slot, so
         going through step()/_apply() too would send two updates for it.
         """
         with self.registry.transaction() as reg:
@@ -170,7 +173,7 @@ class Bridge:
                 )
                 reg["slots"] = new_slots
             snapshot = copy.deepcopy(reg.get("slots", {}))
-        for slot in range(1, 5):
+        for slot in range(1, 4):
             self._apply(SendUpdate(str(slot)), snapshot)
 
     def _apply(self, effect: Effect, snapshot: dict[str, dict]) -> None:

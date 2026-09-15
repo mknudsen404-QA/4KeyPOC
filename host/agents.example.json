@@ -25,13 +25,6 @@
       "family": "claude",
       "command": "claude",
       "cwd": "~/Documents"
-    },
-    {
-      "slot": 4,
-      "name": "Forge",
-      "family": "codex",
-      "command": "codex",
-      "cwd": "~/Documents"
     }
   ]
 }

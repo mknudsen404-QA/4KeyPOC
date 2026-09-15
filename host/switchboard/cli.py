@@ -84,8 +84,8 @@ def update_registry_slot_status(
 
 def launch_agent(args: argparse.Namespace) -> int:
     slot = int(args.slot)
-    if slot < 1 or slot > 4:
-        print("Slots 1 through 4 map to the v1 agent keys.", file=sys.stderr)
+    if slot < 1 or slot > 3:
+        print("Slots 1 through 3 map to the onboard agent keys (the 4th key is push-to-talk).", file=sys.stderr)
         return 2
 
     overrides = {"name": args.name, "family": args.family, "cwd": args.cwd, "command": args.command, "title": args.title}

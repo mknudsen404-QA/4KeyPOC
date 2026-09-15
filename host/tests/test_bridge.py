@@ -131,7 +131,8 @@ def test_worker_survives_step_exception(tmp_path):
     assert len(device.sent) >= 1
 
 
-def test_startup_sync_pushes_four_updates_and_frees_dead(tmp_path):
+def test_startup_sync_pushes_three_updates_and_frees_dead(tmp_path):
+    """Only slots 1-3 are real agent keys (key 4 is push-to-talk)."""
     bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path, auto_launch=False)
     registry.save(
         {
@@ -146,12 +147,11 @@ def test_startup_sync_pushes_four_updates_and_frees_dead(tmp_path):
 
     bridge.startup_sync()
 
-    assert len(device.sent) == 4
+    assert len(device.sent) == 3
     by_slot = {e["slot"]: e for e in device.sent}
     assert by_slot[1]["status"] != "empty"
     assert by_slot[2]["status"] == "empty"
     assert by_slot[3]["status"] == "empty"
-    assert by_slot[4]["status"] == "empty"
     assert "2" not in registry.load()["slots"]
 
 

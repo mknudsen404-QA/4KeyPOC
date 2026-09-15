@@ -39,6 +39,21 @@ def test_migrate_does_not_mutate_input():
     assert v1 == {"agents": [{"slot": 1, "name": "A", "command": "cat"}]}
 
 
+def test_migrate_drops_legacy_out_of_range_slot():
+    """Some existing agents.json files predate the fix confirming only 3
+    physical keys are real agent slots (the 4th is push-to-talk) and
+    configure a dead "slot 4" agent that firmware never launches. Carrying
+    it into v2 would make every future save() fail validation until the
+    user noticed and removed it by hand, so it's dropped during migration
+    instead."""
+    v1 = {"agents": [
+        {"slot": 1, "name": "Maestro", "command": "codex"},
+        {"slot": 4, "name": "Forge", "command": "codex"},
+    ]}
+    v2 = settings.migrate_v1_to_v2(v1)
+    assert [s["slot"] for s in v2["slots"]] == [1]
+
+
 def test_normalize_document_passes_through_existing_v2():
     v2 = {"settings_version": 2, "defaults": {}, "slots": [{"slot": 1, "command": "cat"}]}
     assert settings.normalize_document(v2) == v2

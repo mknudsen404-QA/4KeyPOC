@@ -48,7 +48,7 @@ def run_trace(lines: list[dict], registry_path: Path) -> list[dict]:
         # installed — the family label, not the actual binary, drives hooks.
         "agents": [
             {"slot": n, "name": f"Agent {n}", "family": "claude", "command": "cat", "cwd": "/tmp"}
-            for n in range(1, 5)
+            for n in range(1, 4)
         ]
     }
     bridge = Bridge(

@@ -166,7 +166,7 @@ def bridge_harness(tmp_path, fake_clock):
         # regardless of whether the real Claude Code CLI is installed.
         "agents": [
             {"slot": n, "name": f"Agent {n}", "family": "claude", "command": "cat", "cwd": "/tmp"}
-            for n in range(1, 5)
+            for n in range(1, 4)
         ]
     }
 
@@ -181,7 +181,7 @@ def bridge_harness(tmp_path, fake_clock):
         dry_run=False,
         no_open=False,
     )
-    bridge.startup_sync()  # the initial 4 "empty" lines
+    bridge.startup_sync()  # the initial 3 "empty" lines
 
     thread = threading.Thread(
         target=bridge.run, kwargs=dict(liveness_interval=0.05, hook_port=port), daemon=True
@@ -221,8 +221,8 @@ def test_golden_launch_turn_stop(bridge_harness):
     port = bridge_harness["port"]
     clock = bridge_harness["clock"]
 
-    startup = expect_lines(master, 4)
-    assert [line["status"] for line in startup] == ["empty", "empty", "empty", "empty"]
+    startup = expect_lines(master, 3)
+    assert [line["status"] for line in startup] == ["empty", "empty", "empty"]
 
     press(master, 1)
     launched = expect_lines(master, 1)[0]
@@ -255,7 +255,7 @@ def test_no_duplicate_launch_when_liveness_unknown(bridge_harness):
     master = bridge_harness["master"]
     terminal = bridge_harness["terminal"]
 
-    expect_lines(master, 4)  # startup sync
+    expect_lines(master, 3)  # startup sync
     press(master, 1)
     expect_lines(master, 1)  # launched
     assert len(terminal.opened) == 1
@@ -270,7 +270,7 @@ def test_dead_session_freed_after_two_ticks_and_led_cleared(bridge_harness):
     master = bridge_harness["master"]
     registry = bridge_harness["registry"]
 
-    expect_lines(master, 4)  # startup sync
+    expect_lines(master, 3)  # startup sync
 
     with registry.transaction() as reg:
         from switchboard.model import slot_record
@@ -293,7 +293,7 @@ def test_foreign_session_hooks_ignored(bridge_harness):
     master = bridge_harness["master"]
     port = bridge_harness["port"]
 
-    expect_lines(master, 4)  # startup sync
+    expect_lines(master, 3)  # startup sync
     press(master, 1)
     expect_lines(master, 1)  # launched
 
@@ -310,7 +310,7 @@ def test_registry_race_no_resurrection(bridge_harness):
     port = bridge_harness["port"]
     registry = bridge_harness["registry"]
 
-    expect_lines(master, 4)  # startup sync
+    expect_lines(master, 3)  # startup sync
     press(master, 1)
     expect_lines(master, 1)  # launched
 
@@ -352,7 +352,7 @@ def test_hook_flood_never_resurrects_slot(bridge_harness):
     port = bridge_harness["port"]
     registry = bridge_harness["registry"]
 
-    expect_lines(master, 4)  # startup sync
+    expect_lines(master, 3)  # startup sync
     press(master, 1)
     expect_lines(master, 1)  # launched
     hook(port, "SessionStart", 1, session_id="s-flood")

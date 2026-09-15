@@ -22,7 +22,7 @@ This is the first Mac-side bridge for Switchboard.
 
 It now has two jobs:
 
-1. Launch/register Codex or Claude CLI sessions into four stable agent slots.
+1. Launch/register Codex or Claude CLI sessions into three stable agent slots (a 4th key is dedicated push-to-talk).
 2. Read JSON-lines events from the board, print what they mean, and push registered slot status back to the screen.
 
 It is still observe-only for mutating actions: it does not approve plans, run slash commands, focus terminals, send text into agents, or start microphone recording yet. It also does not yet observe live Codex/Claude terminal output, so it cannot automatically know that a launched agent is asking for access or waiting for input.
@@ -247,7 +247,7 @@ you actually change something. Each slot is:
 ```
 
 Change `family` (`codex` or `claude`) and `command` per slot to control the
-codex/claude mix — nothing stops all four slots from being the same family, or
+codex/claude mix — nothing stops all three slots from being the same family, or
 all different. `effort` is optional (defaults to `medium`) and sets the
 starting reasoning effort for that slot's session. `cwd` resolves in this
 order: the slot's own `cwd` -> the top-level `"defaults": {"cwd": "..."}` ->
@@ -264,7 +264,7 @@ python3 host/switchboard_bridge.py config --show
 
 Changes take effect on that slot's next launch, not any session already running.
 
-## Launch the four-slot example
+## Launch the three-slot example
 
 The example config is `host/agents.example.json` — copy it to `host/agents.json`
 to make it your own editable copy (already done once; see above).
@@ -278,9 +278,10 @@ The current example maps:
 | Slot | Name | CLI |
 | --- | --- | --- |
 | 1 | Maestro | codex |
-| 2 | Agent 2 | codex |
-| 3 | Agent 3 | claude |
-| 4 | Agent 4 | codex |
+| 2 | Scout | codex |
+| 3 | Claude | claude |
+
+Key 4 is push-to-talk, not an agent slot — see "Voice hold" below.
 
 Preview the full launch set:
 
