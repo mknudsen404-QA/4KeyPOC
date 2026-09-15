@@ -18,6 +18,7 @@ host/tests/__pycache__/
 # template; agent_registry.json and agents.json are generated/personal.
 host/agent_registry.json
 host/agent_registry.json.lock
+host/agent_registry.json.ui_token
 host/agents.json
 
 .DS_Store

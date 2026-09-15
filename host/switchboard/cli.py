@@ -4,7 +4,7 @@ Subcommands build the real objects (Registry, a DeviceLink, a
 TerminalDriver, ProcessProber, SystemClock) and either call into
 switchboard.bridge.Bridge (`listen`) or act on the registry/agents config
 directly (`launch`, `launch-all`, `slots`, `status`, `clear`, `config`,
-`install-hooks`, `sync`).
+`settings`, `install-hooks`, `sync`).
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from switchboard.device import FdDevice, FileDevice, SerialDevice, find_default_
 from switchboard.doctor import doctor_command
 from switchboard.families import DEFAULT_FAMILY
 from switchboard.hooks_install import install_hooks
+from switchboard.hooks_server import HOOK_HOST, HOOK_PORT
 from switchboard.key_injector import FakeKeyInjector, RepeatingKeyInjector, macos_key_repeat_timing
 from switchboard.launcher import (
     DEFAULT_AGENTS_CONFIG,
@@ -193,6 +194,40 @@ def clear_slot(args: argparse.Namespace) -> int:
     return 0
 
 
+def settings_command(args: argparse.Namespace) -> int:
+    """The `settings` CLI subcommand: open the settings web UI (Phase 3)
+    in a browser. The page only exists while a bridge is running (it's
+    served by the same loopback HTTP server as the CLI hooks), so this
+    first confirms something is actually listening before opening a tab
+    that would otherwise just show a connection error.
+    """
+    import socket
+    import webbrowser
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(1.0)
+        reachable = sock.connect_ex((args.host, args.port)) == 0
+    if not reachable:
+        print(
+            f"No bridge is listening on {args.host}:{args.port}. Start the bridge first "
+            "(switchboard_bridge.py listen), then run `settings` again.",
+            file=sys.stderr,
+        )
+        return 2
+
+    token_path = Path(args.registry).with_name(Path(args.registry).name + ".ui_token")
+    try:
+        token = token_path.read_text().strip()
+    except OSError:
+        token = ""
+    url = f"http://{args.host}:{args.port}/" + (f"?t={token}" if token else "")
+
+    print(url)
+    if not args.no_browser:
+        webbrowser.open(url)
+    return 0
+
+
 def _make_bridge(args: argparse.Namespace, device):
     from switchboard.bridge import Bridge, _default_log
 
@@ -364,6 +399,13 @@ def build_parser() -> argparse.ArgumentParser:
     config_parser.add_argument("--effort", help="low, medium, high, xhigh, or max")
     config_parser.add_argument("--default-cwd")
     config_parser.add_argument("--show", action="store_true")
+
+    settings_parser = subcommands.add_parser("settings", help="Open the settings web UI in a browser")
+    settings_parser.set_defaults(func=settings_command)
+    settings_parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY, help="Used to find the running bridge's UI token")
+    settings_parser.add_argument("--host", default=HOOK_HOST)
+    settings_parser.add_argument("--port", type=int, default=HOOK_PORT)
+    settings_parser.add_argument("--no-browser", action="store_true", help="Print the URL instead of opening it")
 
     hooks_parser = subcommands.add_parser(
         "install-hooks",

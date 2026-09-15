@@ -7,15 +7,17 @@ from __future__ import annotations
 
 import copy
 import queue
+import secrets
 import threading
 import time
 import traceback
+from pathlib import Path
 from typing import Callable
 
 from switchboard import model
 from switchboard.device import DeviceLink
 from switchboard.events import BoardEvent, Event, LivenessObserved, Shutdown, SlotRegistered, parse_board_line
-from switchboard.hooks_server import HOOK_HOST, HOOK_PORT, start_hook_server
+from switchboard.hooks_server import HOOK_HOST, HOOK_PORT, UIContext, start_hook_server
 from switchboard.key_injector import FakeKeyInjector, KeyInjector
 from switchboard.launcher import build_launch
 from switchboard.liveness import ProcessProber
@@ -244,6 +246,15 @@ class Bridge:
         self.launch_config = to_launch_config(SlotSettingsService(self.settings_path).load())
         self.log("settings reloaded")
 
+    def ui_token_path(self) -> Path:
+        """Where `run()` writes the settings UI's per-run token (Phase 3),
+        so a separate `switchboard settings` CLI invocation can discover
+        the currently-running bridge's token and build the right URL.
+        Colocated with the registry (already this process's own personal,
+        gitignored state) rather than a new well-known directory.
+        """
+        return self.registry.path.with_name(self.registry.path.name + ".ui_token")
+
     def _apply_launch(self, slot: int) -> None:
         self._maybe_reload_settings(force_check=True)
         plan = build_launch(slot, self.launch_config)
@@ -311,7 +322,24 @@ class Bridge:
         reader_thread.start()
         ticker_thread = threading.Thread(target=tick_liveness, daemon=True)
         ticker_thread.start()
-        hook_server = start_hook_server(self.submit, hook_host, hook_port)
+
+        # The settings UI (Phase 3) is only wired up when this Bridge has a
+        # settings_path (Phase 2.4's hot-reload opt-in) — every existing
+        # caller/test without one keeps the hook-POST-only server it had
+        # before, with ui_context=None.
+        ui_context: UIContext | None = None
+        ui_token_path: Path | None = None
+        if self.settings_path is not None:
+            token = secrets.token_urlsafe(24)
+            ui_context = UIContext(settings_path=self.settings_path, registry=self.registry, token=token)
+            ui_token_path = self.ui_token_path()
+            try:
+                ui_token_path.parent.mkdir(parents=True, exist_ok=True)
+                ui_token_path.write_text(token)
+                ui_token_path.chmod(0o600)
+            except OSError as exc:
+                self.log(f"Could not write UI token file {ui_token_path}: {exc}")
+        hook_server = start_hook_server(self.submit, hook_host, hook_port, ui_context=ui_context)
 
         started = self.clock.monotonic()
         try:
@@ -332,6 +360,11 @@ class Bridge:
                     traceback.print_exc()
         finally:
             stop.set()
+            if ui_token_path is not None:
+                try:
+                    ui_token_path.unlink()
+                except OSError:
+                    pass
             if hook_server is not None:
                 # shutdown() blocks until serve_forever()'s loop notices and
                 # exits — bound the wait so a slow/stuck HTTP server can

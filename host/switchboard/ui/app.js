@@ -1,0 +1,271 @@
+(function () {
+  "use strict";
+
+  var TOKEN = window.SWITCHBOARD_TOKEN || "";
+  var SLOTS = [1, 2, 3]; // key 4 is push-to-talk, not an agent slot
+  var EFFORT_VALUES = ["low", "medium", "high", "xhigh", "max"];
+
+  var state = {
+    document: null,
+    versionToken: null,
+    families: [],
+    voiceProviders: [],
+    status: {},
+  };
+
+  function $(sel, root) { return (root || document).querySelector(sel); }
+
+  function banner(message) {
+    var el = $("#banner");
+    if (!message) {
+      el.hidden = true;
+      el.textContent = "";
+      return;
+    }
+    el.hidden = false;
+    el.textContent = message;
+  }
+
+  function setBridgeStatus(ok, text) {
+    var el = $("#bridge-status");
+    el.textContent = text;
+    el.className = "pill " + (ok ? "pill-ok" : "pill-err");
+  }
+
+  function fetchJSON(url, options) {
+    return fetch(url, options).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (body) {
+        return { ok: res.ok, status: res.status, body: body };
+      });
+    });
+  }
+
+  function fillSelect(select, options, selected) {
+    select.innerHTML = "";
+    options.forEach(function (opt) {
+      var el = document.createElement("option");
+      el.value = opt.value;
+      el.textContent = opt.label;
+      if (opt.value === selected) el.selected = true;
+      select.appendChild(el);
+    });
+  }
+
+  function slotDoc(number) {
+    var slots = (state.document && state.document.slots) || [];
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i].slot === number) return slots[i];
+    }
+    return { slot: number };
+  }
+
+  function statusFor(number) {
+    var slots = (state.status && state.status.slots) || [];
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i].slot === number) return slots[i];
+    }
+    return null;
+  }
+
+  function familyChoices() {
+    var choices = state.families.map(function (f) {
+      return { value: f.name, label: f.display_name + (f.detected ? " ✓" : " (not found)") };
+    });
+    choices.push({ value: "__custom__", label: "Custom command…" });
+    return choices;
+  }
+
+  function renderSlotCard(number) {
+    var template = $("#slot-card-template");
+    var node = template.content.firstElementChild.cloneNode(true);
+    var doc = slotDoc(number);
+    var live = statusFor(number);
+
+    $(".slot-title", node).textContent = "Slot " + number + " — key " + "ABC"[number - 1];
+    $(".f-name", node).value = doc.name || "";
+
+    var familySelect = $(".f-family", node);
+    var knownNames = state.families.map(function (f) { return f.name; });
+    var currentFamily = doc.family;
+    var isCustom = currentFamily && knownNames.indexOf(currentFamily) === -1;
+    fillSelect(familySelect, familyChoices(), isCustom ? "__custom__" : (currentFamily || ""));
+
+    var commandRow = $(".f-command-row", node);
+    var commandInput = $(".f-command", node);
+    commandInput.value = doc.command || "";
+
+    function syncCommandVisibility() {
+      var isCustomNow = familySelect.value === "__custom__";
+      commandRow.hidden = !isCustomNow;
+      if (!isCustomNow) {
+        // Known families launch their own binary by convention (family
+        // name == command name, e.g. "claude" -> claude, "codex" -> codex).
+        commandInput.value = familySelect.value;
+      }
+    }
+    familySelect.addEventListener("change", syncCommandVisibility);
+    syncCommandVisibility();
+    if (isCustom) commandRow.hidden = false; // keep the real custom command visible on load
+
+    $(".f-cwd", node).value = doc.cwd || "";
+
+    var effortSelect = $(".f-effort", node);
+    fillSelect(
+      effortSelect,
+      EFFORT_VALUES.map(function (v) { return { value: v, label: v }; }),
+      doc.effort || (state.document.defaults && state.document.defaults.effort) || "medium"
+    );
+
+    var voiceProviderSelect = $(".f-voice-provider", node);
+    var voice = doc.voice || {};
+    fillSelect(
+      voiceProviderSelect,
+      state.voiceProviders.map(function (p) {
+        return { value: p.name, label: p.display_name + (p.available ? "" : " (not available yet)") };
+      }),
+      voice.provider || "none"
+    );
+
+    var voiceFields = $(".voice-fields", node);
+    var chordInput = $(".f-voice-chord", node);
+    var modeSelect = $(".f-voice-mode", node);
+    chordInput.value = voice.chord || "";
+    fillSelect(modeSelect, [{ value: "hold", label: "Hold" }, { value: "toggle", label: "Toggle" }], voice.mode || "hold");
+
+    function syncVoiceVisibility() {
+      voiceFields.hidden = voiceProviderSelect.value === "none";
+    }
+    voiceProviderSelect.addEventListener("change", syncVoiceVisibility);
+    syncVoiceVisibility();
+
+    var statusPill = $(".f-status", node);
+    if (live) {
+      statusPill.textContent = live.status;
+      statusPill.className = "f-status pill " + (live.status === "empty" ? "pill-muted" : "pill-ok");
+    } else {
+      statusPill.textContent = "empty";
+    }
+
+    var family = state.families.filter(function (f) { return f.name === (currentFamily || ""); })[0];
+    $(".f-tier", node).textContent = family ? "Tier: " + family.tier : "";
+
+    node.dataset.slot = String(number);
+    return node;
+  }
+
+  function render() {
+    var container = $("#slots");
+    container.innerHTML = "";
+    SLOTS.forEach(function (n) { container.appendChild(renderSlotCard(n)); });
+
+    fillSelect($("#default-effort"), EFFORT_VALUES.map(function (v) { return { value: v, label: v }; }), (state.document.defaults && state.document.defaults.effort) || "medium");
+    $("#default-cwd").value = (state.document.defaults && state.document.defaults.cwd) || "";
+  }
+
+  function collectDocument() {
+    var slots = SLOTS.map(function (number) {
+      var card = document.querySelector('.slot-card[data-slot="' + number + '"]');
+      var name = $(".f-name", card).value.trim();
+      var family = $(".f-family", card).value;
+      var command = $(".f-command", card).value.trim();
+      var cwd = $(".f-cwd", card).value.trim();
+      var effort = $(".f-effort", card).value;
+      var voiceProvider = $(".f-voice-provider", card).value;
+
+      var slot = { slot: number };
+      if (name) slot.name = name;
+      if (family && family !== "__custom__") slot.family = family;
+      if (command) slot.command = command;
+      if (cwd) slot.cwd = cwd;
+      if (effort) slot.effort = effort;
+      if (voiceProvider && voiceProvider !== "none") {
+        var voice = { provider: voiceProvider };
+        var chord = $(".f-voice-chord", card).value.trim();
+        if (chord) voice.chord = chord;
+        voice.mode = $(".f-voice-mode", card).value;
+        slot.voice = voice;
+      }
+      return slot;
+    });
+
+    var defaults = {};
+    var defaultCwd = $("#default-cwd").value.trim();
+    var defaultEffort = $("#default-effort").value;
+    if (defaultCwd) defaults.cwd = defaultCwd;
+    if (defaultEffort) defaults.effort = defaultEffort;
+
+    return { settings_version: 2, defaults: defaults, slots: slots };
+  }
+
+  function save() {
+    var saveStatus = $("#save-status");
+    var button = $("#save-btn");
+    button.disabled = true;
+    saveStatus.textContent = "Saving…";
+    saveStatus.className = "save-status";
+
+    fetchJSON("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-Switchboard-Token": TOKEN },
+      body: JSON.stringify({ document: collectDocument(), version_token: state.versionToken }),
+    }).then(function (result) {
+      button.disabled = false;
+      if (result.status === 200) {
+        state.document = result.body.document;
+        state.versionToken = result.body.version_token;
+        saveStatus.textContent = "Saved. Takes effect on each slot's next launch.";
+        saveStatus.className = "save-status ok";
+        render();
+        return;
+      }
+      if (result.status === 409) {
+        saveStatus.textContent = "Settings changed elsewhere — reloaded the latest version. Review and save again.";
+        saveStatus.className = "save-status err";
+        state.document = result.body.current.document;
+        state.versionToken = result.body.current.version_token;
+        render();
+        return;
+      }
+      if (result.status === 422) {
+        var messages = (result.body.errors || []).map(function (e) { return e.path + ": " + e.message; });
+        saveStatus.textContent = messages.join("; ") || "Could not save.";
+        saveStatus.className = "save-status err";
+        return;
+      }
+      saveStatus.textContent = "Could not save (" + result.status + ").";
+      saveStatus.className = "save-status err";
+    }).catch(function () {
+      button.disabled = false;
+      saveStatus.textContent = "Could not reach the bridge.";
+      saveStatus.className = "save-status err";
+      setBridgeStatus(false, "bridge: unreachable");
+    });
+  }
+
+  function loadAll() {
+    return Promise.all([
+      fetchJSON("/api/settings"),
+      fetchJSON("/api/families"),
+      fetchJSON("/api/voice-providers"),
+      fetchJSON("/api/status"),
+    ]).then(function (results) {
+      var settingsRes = results[0], familiesRes = results[1], voiceRes = results[2], statusRes = results[3];
+      if (!settingsRes.ok) throw new Error("settings fetch failed");
+      state.document = settingsRes.body.document;
+      state.versionToken = settingsRes.body.version_token;
+      state.families = familiesRes.body.families || [];
+      state.voiceProviders = voiceRes.body.providers || [];
+      state.status = statusRes.body || {};
+      setBridgeStatus(true, "bridge: running");
+      banner(null);
+      render();
+    }).catch(function () {
+      setBridgeStatus(false, "bridge: unreachable");
+      banner("Could not reach the bridge. Start it (or reload this page) and try again.");
+      $("#save-btn").disabled = true;
+    });
+  }
+
+  $("#save-btn").addEventListener("click", save);
+  loadAll();
+})();

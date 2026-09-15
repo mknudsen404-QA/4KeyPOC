@@ -295,6 +295,31 @@ List registered slots:
 python3 host/switchboard_bridge.py slots
 ```
 
+## Settings web UI
+
+While the bridge (`listen`) is running, `switchboard settings` opens a small
+loopback-only web page for editing the same three slots `config` edits — no
+JSON, no terminal:
+
+```sh
+python3 host/switchboard_bridge.py settings
+```
+
+It checks that a bridge is actually listening first, prints the page's URL,
+and opens it in the default browser (`--no-browser` to just print the URL,
+useful over SSH). The page is served by the bridge itself on
+`127.0.0.1:8877`; it only exists while a bridge is running, so `settings`
+prints "start the bridge first" instead of opening a dead tab if there isn't
+one. A per-run token (embedded in the page, required on the save request)
+plus a Host/Origin check block DNS-rebinding and cross-site requests from
+any other page open in the same browser — there's no login beyond that,
+since it's your own machine and your own process.
+
+Save is whole-document with optimistic concurrency: if `config` (or another
+browser tab) changed the file since the page loaded it, Save reloads the
+latest version instead of clobbering it. Changes apply on each slot's next
+launch, same as `config`.
+
 ## Real status auto-detection (lifecycle hooks)
 
 Run once to wire Switchboard into Claude Code's and Codex's real lifecycle hooks

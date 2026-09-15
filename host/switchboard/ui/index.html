@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard settings</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<script>window.SWITCHBOARD_TOKEN = "{{TOKEN}}";</script>
+
+<header class="topbar">
+  <h1>Switchboard settings</h1>
+  <div id="bridge-status" class="pill pill-muted">checking bridge&hellip;</div>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<main id="slots"></main>
+
+<section class="defaults-card card">
+  <h2>Defaults</h2>
+  <label>Folder <input id="default-cwd" type="text" placeholder="~/Documents"></label>
+  <label>Effort
+    <select id="default-effort"></select>
+  </label>
+</section>
+
+<footer class="actions">
+  <button id="save-btn" type="button">Save</button>
+  <span id="save-status" class="save-status"></span>
+</footer>
+
+<p class="hint">Changes apply the next time a slot launches, not to a session already running. The 4th key is push-to-talk — not an agent slot — so it has no card here.</p>
+
+<template id="slot-card-template">
+  <section class="card slot-card">
+    <h2 class="slot-title"></h2>
+    <label>Name <input class="f-name" type="text"></label>
+    <label>CLI
+      <select class="f-family"></select>
+    </label>
+    <label class="f-command-row">Command <input class="f-command" type="text"></label>
+    <div class="f-badge"></div>
+    <label>Folder <input class="f-cwd" type="text" placeholder="(use default)"></label>
+    <label>Effort
+      <select class="f-effort"></select>
+    </label>
+    <label>Push-to-talk
+      <select class="f-voice-provider"></select>
+    </label>
+    <div class="voice-fields" hidden>
+      <label>Chord <input class="f-voice-chord" type="text" placeholder="fn"></label>
+      <label>Mode
+        <select class="f-voice-mode"></select>
+      </label>
+    </div>
+    <div class="slot-footer">
+      <span class="f-status pill pill-muted"></span>
+      <span class="f-tier"></span>
+    </div>
+  </section>
+</template>
+
+<script src="/app.js"></script>
+</body>
+</html>
