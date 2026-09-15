@@ -11,7 +11,7 @@ from switchboard.terminal import FakeTerminal
 
 def make_bridge(
     tmp_path, *, clock=None, auto_launch=True, dry_run=False, no_open=False, launch_config=None,
-    close_dead_tabs=False,
+    close_dead_tabs=False, settings_path=None,
 ):
     registry = Registry(tmp_path / "registry.json")
     device = FakeDevice()
@@ -31,6 +31,7 @@ def make_bridge(
         no_open=no_open,
         close_dead_tabs=close_dead_tabs,
         key_injector=key_injector,
+        settings_path=settings_path,
     )
     return bridge, registry, device, terminal, prober, clock, key_injector
 
@@ -259,6 +260,79 @@ def test_voice_hold_stop_releases_key(tmp_path):
     bridge.step(BoardEvent("voice.hold.stop", {"slot": 1}))
 
     assert key_injector.released == [(1234, 49)]
+
+
+def test_settings_reload_before_launch_picks_up_change(tmp_path, monkeypatch):
+    """Phase 2.4: a Launch always checks agents.json first, regardless of
+    the 5s tick throttle, so a freshly-saved setting applies right away."""
+    from switchboard.settings import SlotSettingsService, empty_document
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "Documents").mkdir()
+    settings_path = tmp_path / "agents.json"
+    service = SlotSettingsService(settings_path)
+    doc = empty_document()
+    doc["slots"].append({"slot": 1, "name": "Old", "family": "shell", "command": "cat"})
+    service.save(doc)
+
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(
+        tmp_path,
+        launch_config={"agents": [{"slot": 1, "name": "Old", "family": "shell", "command": "cat"}]},
+        settings_path=settings_path,
+    )
+    logs = []
+    bridge.log = logs.append
+
+    doc["slots"][0]["name"] = "New"
+    doc["slots"][0]["command"] = "echo"
+    service.save(doc)
+
+    bridge.step(BoardEvent("agent.select", {"slot": 1}))
+
+    assert "settings reloaded" in logs
+    record = registry.load()["slots"]["1"]
+    assert record["name"] == "New"
+    assert record["command"].endswith("echo")
+
+
+def test_settings_reload_tick_is_throttled(tmp_path, monkeypatch):
+    from switchboard.settings import SlotSettingsService, empty_document
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "Documents").mkdir()
+    settings_path = tmp_path / "agents.json"
+    service = SlotSettingsService(settings_path)
+    doc = empty_document()
+    doc["slots"].append({"slot": 1, "name": "Old", "command": "cat"})
+    service.save(doc)
+
+    clock = FakeClock()
+    bridge, *_rest, clock, _key_injector = make_bridge(
+        tmp_path, clock=clock, settings_path=settings_path,
+        launch_config={"agents": [{"slot": 1, "name": "Old", "command": "cat"}]},
+    )
+    logs = []
+    bridge.log = logs.append
+
+    doc["slots"][0]["name"] = "New"
+    service.save(doc)
+
+    clock.advance(2.0)
+    bridge._maybe_reload_settings()
+    assert "settings reloaded" not in logs
+    assert bridge.launch_config["agents"][0]["name"] == "Old"
+
+    clock.advance(4.0)  # 6s total: past the 5s throttle
+    bridge._maybe_reload_settings()
+    assert "settings reloaded" in logs
+    assert bridge.launch_config["agents"][0]["name"] == "New"
+
+
+def test_settings_reload_noop_when_settings_path_not_given(tmp_path):
+    bridge, *_rest = make_bridge(tmp_path)
+    original = bridge.launch_config
+    bridge._maybe_reload_settings(force_check=True)
+    assert bridge.launch_config is original
 
 
 def test_default_log_flushes(monkeypatch):

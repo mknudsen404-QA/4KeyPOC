@@ -87,7 +87,8 @@ def test_config_subcommand_writes_agents_json(tmp_path, monkeypatch, capsys):
     assert result == 0
 
     written = json.loads(agents_config.read_text())
-    agent = next(a for a in written["agents"] if a["slot"] == 1)
+    assert written["settings_version"] == 2
+    agent = next(a for a in written["slots"] if a["slot"] == 1)
     assert agent["name"] == "TestAgent"
     assert agent["family"] == "claude"
     assert agent["command"] == "claude"
@@ -95,6 +96,63 @@ def test_config_subcommand_writes_agents_json(tmp_path, monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert "next launch" in captured.out
+
+
+def test_config_subcommand_cwd_flag_writes_v2_document(tmp_path, monkeypatch):
+    """CLI parity: every `config` flag ends up going through
+    SlotSettingsService — this covers --cwd specifically, since the flag
+    above already covers --name/--family/--command/--effort."""
+    agents_config = tmp_path / "agents.json"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project_dir = tmp_path / "Documents" / "project"
+    project_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        sys, "argv",
+        ["bridge.py", "config", "--agents-config", str(agents_config), "--slot", "2", "--cwd", str(project_dir)],
+    )
+    parser = cli.build_parser()
+    args = parser.parse_args()
+    assert args.func(args) == 0
+
+    written = json.loads(agents_config.read_text())
+    agent = next(a for a in written["slots"] if a["slot"] == 2)
+    assert agent["cwd"] == str(project_dir)
+
+
+def test_config_subcommand_default_cwd_flag_writes_v2_document(tmp_path, monkeypatch):
+    agents_config = tmp_path / "agents.json"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "Documents").mkdir()
+
+    monkeypatch.setattr(
+        sys, "argv",
+        ["bridge.py", "config", "--agents-config", str(agents_config), "--default-cwd", "~/Documents"],
+    )
+    parser = cli.build_parser()
+    args = parser.parse_args()
+    assert args.func(args) == 0
+
+    written = json.loads(agents_config.read_text())
+    assert written["settings_version"] == 2
+    assert written["defaults"]["cwd"] == str(tmp_path / "Documents")
+
+
+def test_config_subcommand_show_flag_prints_v2_document(tmp_path, monkeypatch, capsys):
+    agents_config = tmp_path / "agents.json"
+    agents_config.write_text(json.dumps({"agents": [{"slot": 1, "name": "A", "command": "cat"}]}))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    monkeypatch.setattr(sys, "argv", ["bridge.py", "config", "--agents-config", str(agents_config), "--show"])
+    parser = cli.build_parser()
+    args = parser.parse_args()
+    assert args.func(args) == 0
+
+    shown = json.loads(capsys.readouterr().out)
+    assert shown["settings_version"] == 2
+    assert shown["slots"] == [{"slot": 1, "name": "A", "command": "cat"}]
+    # --show never writes: the on-disk file is still v1 until a real change is saved.
+    assert "agents" in json.loads(agents_config.read_text())
 
 
 def test_launch_all_uses_defaults_cwd_and_effort(tmp_path, monkeypatch, registry_path):

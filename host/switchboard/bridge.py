@@ -30,6 +30,12 @@ from switchboard.terminal import TerminalDriver
 FOCUS_SETTLE_TIMEOUT_S = 0.3
 FOCUS_SETTLE_POLL_INTERVAL_S = 0.03
 
+# How often the settings file is allowed to be re-stat()ed for a change on
+# the periodic tick (Phase 2.4). A Launch always checks regardless of this
+# throttle — it's cheap (one stat) and launches are rare enough that
+# freshness there matters more than avoiding the syscall.
+SETTINGS_RELOAD_INTERVAL_S = 5.0
+
 
 def _default_log(message: str) -> None:
     # Plain `print` alone isn't enough here: when stdout is redirected to a
@@ -68,6 +74,7 @@ class Bridge:
         close_dead_tabs: bool = False,
         key_injector: KeyInjector | None = None,
         log: Callable[[str], None] = _default_log,
+        settings_path=None,
     ) -> None:
         self.registry = registry
         self.device = device
@@ -76,6 +83,18 @@ class Bridge:
         self.key_injector = key_injector or FakeKeyInjector()
         self.clock = clock
         self.launch_config = launch_config
+        # settings_path is optional (Phase 2.4): when given, launch_config
+        # is refreshed from switchboard.settings.SlotSettingsService before
+        # each Launch and on a throttled tick — see _maybe_reload_settings.
+        # Every existing caller that only passes a static launch_config
+        # dict (every test, and any caller that doesn't opt in) keeps that
+        # dict forever, unchanged.
+        self.settings_path = settings_path
+        self._settings_token = self._settings_version_token() if settings_path is not None else None
+        # Baselined at construction time (not 0.0) so the throttle actually
+        # throttles from startup instead of every bridge treating its first
+        # tick as "5s overdue" just because clock.monotonic() isn't epoch 0.
+        self._last_settings_check = clock.monotonic()
         self.auto_launch = auto_launch
         self.dry_run = dry_run
         self.no_open = no_open
@@ -193,7 +212,37 @@ class Bridge:
                 return False
             time.sleep(FOCUS_SETTLE_POLL_INTERVAL_S)
 
+    def _settings_version_token(self) -> str | None:
+        if self.settings_path is None:
+            return None
+        from switchboard.settings import SlotSettingsService
+
+        return SlotSettingsService(self.settings_path).version_token()
+
+    def _maybe_reload_settings(self, *, force_check: bool = False) -> None:
+        """Phase 2.4: pick up agents.json changes without a bridge
+        restart. A no-op unless `settings_path` was given. Only ever
+        replaces `self.launch_config` — a slot already launched keeps
+        running with whatever it was launched with; the new config
+        applies on that slot's *next* launch.
+        """
+        if self.settings_path is None:
+            return
+        now = self.clock.monotonic()
+        if not force_check and (now - self._last_settings_check) < SETTINGS_RELOAD_INTERVAL_S:
+            return
+        self._last_settings_check = now
+        token = self._settings_version_token()
+        if token == self._settings_token:
+            return
+        self._settings_token = token
+        from switchboard.settings import SlotSettingsService, to_launch_config
+
+        self.launch_config = to_launch_config(SlotSettingsService(self.settings_path).load())
+        self.log("settings reloaded")
+
     def _apply_launch(self, slot: int) -> None:
+        self._maybe_reload_settings(force_check=True)
         plan = build_launch(slot, self.launch_config)
         if self.dry_run:
             self.log(f"Would launch slot {slot}: {plan.shell_command}")
@@ -245,6 +294,7 @@ class Bridge:
         def tick_liveness() -> None:
             while not stop.wait(liveness_interval):
                 try:
+                    self._maybe_reload_settings()
                     with self.registry.transaction() as reg:
                         slots = reg.get("slots", {})
                         results = {k: self.prober.probe(v) for k, v in slots.items()}

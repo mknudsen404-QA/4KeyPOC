@@ -218,6 +218,7 @@ def _make_bridge(args: argparse.Namespace, device):
         prober=ProcessProber(log=_default_log),
         clock=SystemClock(),
         launch_config=load_agents_config(args.launch_config),
+        settings_path=args.launch_config,
         auto_launch=args.auto_launch,
         dry_run=args.dry_run,
         no_open=args.no_open,

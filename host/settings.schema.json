@@ -1,0 +1,57 @@
+{
+  "$comment": "Documentation only — not loaded or enforced at runtime. The real validator is switchboard/settings.py's validate_document(), a small stdlib implementation (no jsonschema dependency) kept in lockstep with this file by hand. See docs/design/slot-settings-and-family-parity-plan.md Phase 2.1.",
+  "type": "object",
+  "required": ["settings_version", "slots"],
+  "properties": {
+    "settings_version": {
+      "const": 2
+    },
+    "defaults": {
+      "type": "object",
+      "properties": {
+        "cwd": { "type": "string" },
+        "effort": { "enum": ["low", "medium", "high", "xhigh", "max"] }
+      }
+    },
+    "slots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["slot"],
+        "properties": {
+          "slot": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4,
+            "$comment": "Today's board: 4 stable onboard agent keys."
+          },
+          "name": { "type": "string" },
+          "family": {
+            "type": "string",
+            "$comment": "Optional — inferred from `command`'s basename when omitted (switchboard.families.FamilyRegistry.infer). Any string is accepted; an unrecognised one falls back to the generic (launch-only) tier rather than failing."
+          },
+          "command": { "type": "string" },
+          "args": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
+          },
+          "cwd": { "type": "string" },
+          "effort": { "enum": ["low", "medium", "high", "xhigh", "max"] },
+          "voice": {
+            "type": "object",
+            "properties": {
+              "provider": { "enum": ["claude_native", "hotkey", "none"] },
+              "chord": { "type": "string" },
+              "mode": { "enum": ["hold", "toggle"] }
+            }
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

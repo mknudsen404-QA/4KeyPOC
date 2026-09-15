@@ -6,7 +6,6 @@ command and the bridge's Launch effect.
 from __future__ import annotations
 
 import json
-import os
 import shlex
 import shutil
 import sys
@@ -34,12 +33,23 @@ KNOWN_COMMAND_PATHS = family_registry.known_paths_map()
 
 
 def load_agents_config(path: Path) -> dict:
+    """Returns the v1-shaped `{"agents": [...], "defaults": {...}}` dict
+    every launch function here expects, regardless of whether `path` is
+    an old v1 file or a v2 settings document (settings_version: 2,
+    `slots` instead of `agents`) — see switchboard/settings.py. This is
+    what lets the whole launch pipeline stay unchanged as agents.json
+    migrates to v2.
+    """
     if not path.exists():
         return {"agents": []}
     with path.expanduser().open("r", encoding="utf-8") as handle:
         data = json.load(handle)
     if not isinstance(data, dict):
         raise ValueError(f"Agent config is not an object: {path}")
+    if data.get("settings_version") == 2:
+        from switchboard.settings import to_launch_config
+
+        return to_launch_config(data)
     data.setdefault("agents", [])
     return data
 
@@ -120,34 +130,27 @@ def terminal_command(cwd: str, command: str, title: str, slot: int | None = None
     return "\n".join(lines)
 
 
-def _write_agents_config(path: Path, config: dict) -> None:
-    path = path.expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    with tmp.open("w", encoding="utf-8") as handle:
-        json.dump(config, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, path)
-
-
 def config_command(args) -> int:
-    """The `config` CLI subcommand: edit host/agents.json (per-slot launch
-    config). Takes an argparse.Namespace; kept here (not cli.py) because
-    it's really just structured editing of the file load_agents_config
-    reads, with the same fallback-to-example-config resolution.
+    """The `config` CLI subcommand: a thin wrapper over
+    SlotSettingsService (settings.py) — it turns argparse flags into a
+    patch dict and lets the service do the load/validate/save. Always
+    reads and writes settings v2 (`{"settings_version": 2, "slots": [...]}`
+    ); an existing v1 agents.json is migrated to v2 in memory the first
+    time this runs and only written back once a change is actually saved.
     """
+    from switchboard.settings import SettingsValidationError, SlotSettingsService
+
     agents_config_path = Path(args.agents_config).expanduser()
+    service = SlotSettingsService(agents_config_path)
     if agents_config_path.exists():
-        config = load_agents_config(agents_config_path)
+        doc = service.load()
     elif EXAMPLE_AGENTS_CONFIG.exists():
-        config = load_agents_config(EXAMPLE_AGENTS_CONFIG)
+        doc = SlotSettingsService(EXAMPLE_AGENTS_CONFIG).load()
     else:
-        config = {"agents": []}
+        doc = service.load()  # empty v2 document
 
     if args.show:
-        print(json.dumps(config, indent=2, sort_keys=True))
+        print(json.dumps(doc, indent=2, sort_keys=True))
         return 0
 
     if args.default_cwd is not None:
@@ -156,8 +159,8 @@ def config_command(args) -> int:
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 2
-        config.setdefault("defaults", {})["cwd"] = resolved
-        _write_agents_config(agents_config_path, config)
+        doc.setdefault("defaults", {})["cwd"] = resolved
+        service.save(doc)
         print(f"Default cwd set to {resolved}.")
         print("Takes effect on each slot's next launch.")
         return 0
@@ -166,32 +169,32 @@ def config_command(args) -> int:
         print("Specify --slot, --default-cwd, or --show.", file=sys.stderr)
         return 2
 
-    agents = config.setdefault("agents", [])
-    agent = next((a for a in agents if int(a.get("slot", 0)) == args.slot), None)
-    if agent is None:
-        agent = {"slot": args.slot}
-        agents.append(agent)
-
+    patch: dict = {}
     if args.cwd is not None:
         try:
-            agent["cwd"] = validate_or_create_cwd(args.cwd)
+            patch["cwd"] = validate_or_create_cwd(args.cwd)
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 2
     if args.name is not None:
-        agent["name"] = args.name
+        patch["name"] = args.name
     if args.family is not None:
-        agent["family"] = args.family
+        patch["family"] = args.family
     if args.command is not None:
-        agent["command"] = args.command
+        patch["command"] = args.command
     if args.effort is not None:
-        agent["effort"] = normalize_effort(args.effort)
+        patch["effort"] = normalize_effort(args.effort)
 
-    _write_agents_config(agents_config_path, config)
+    try:
+        slot_doc = service.update_slot(args.slot, patch, doc=doc)
+    except SettingsValidationError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
     print(
-        f"Slot {args.slot}: {agent.get('name', f'Agent {args.slot}')} "
-        f"({agent.get('family', DEFAULT_FAMILY)}) command={agent.get('command', DEFAULT_FAMILY)!r} "
-        f"cwd={resolve_agent_cwd(agent, config)}"
+        f"Slot {args.slot}: {slot_doc.get('name', f'Agent {args.slot}')} "
+        f"({slot_doc.get('family', DEFAULT_FAMILY)}) command={slot_doc.get('command', DEFAULT_FAMILY)!r} "
+        f"cwd={resolve_agent_cwd(slot_doc, doc)}"
     )
     print("Takes effect on this slot's next launch.")
     return 0

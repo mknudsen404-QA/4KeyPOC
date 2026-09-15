@@ -236,10 +236,14 @@ python3 host/switchboard_bridge.py launch \
 Auto-launch and `launch-all` both read `host/agents.json` if it exists, falling
 back to the checked-in `host/agents.example.json` template otherwise.
 `agents.json` is yours — not checked in, safe to edit freely (or edit it with
-`switchboard_bridge.py config`, see below). Each slot is:
+`switchboard_bridge.py config`, see below). It's a settings v2 document
+(`"settings_version": 2`, `"slots"` — see `host/switchboard/settings.py`);
+an older v1 file (`"agents"` instead of `"slots"`) still loads fine and is
+migrated in memory the first time you run `config`, written back only once
+you actually change something. Each slot is:
 
 ```json
-{ "slot": 1, "name": "Maestro", "family": "codex", "cwd": "...", "command": "codex", "effort": "medium" }
+{ "slot": 1, "name": "Maestro", "family": "codex", "command": "codex", "args": [], "cwd": "...", "effort": "medium" }
 ```
 
 Change `family` (`codex` or `claude`) and `command` per slot to control the

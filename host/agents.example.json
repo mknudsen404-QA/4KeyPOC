@@ -1,39 +1,37 @@
 {
+  "settings_version": 2,
   "defaults": {
-    "cwd": "~/Documents"
+    "cwd": "~/Documents",
+    "effort": "medium"
   },
-  "agents": [
+  "slots": [
     {
       "slot": 1,
       "name": "Maestro",
       "family": "codex",
-      "cwd": "~/Documents",
       "command": "codex",
-      "title": "Switchboard Agent 1 — Maestro"
+      "cwd": "~/Documents"
     },
     {
       "slot": 2,
       "name": "Scout",
       "family": "codex",
-      "cwd": "~/Documents",
       "command": "codex",
-      "title": "Switchboard Agent 2 — Scout"
+      "cwd": "~/Documents"
     },
     {
       "slot": 3,
       "name": "Claude",
       "family": "claude",
-      "cwd": "~/Documents",
       "command": "claude",
-      "title": "Switchboard Agent 3 — Claude"
+      "cwd": "~/Documents"
     },
     {
       "slot": 4,
       "name": "Forge",
       "family": "codex",
-      "cwd": "~/Documents",
       "command": "codex",
-      "title": "Switchboard Agent 4 — Forge"
+      "cwd": "~/Documents"
     }
   ]
 }
