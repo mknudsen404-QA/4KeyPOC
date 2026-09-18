@@ -82,6 +82,7 @@ def test_launcher_build_launch_golden(monkeypatch, tmp_path):
         "command": "/usr/bin/claude",
         "terminal_title": "Switchboard A2 Foo",
         "effort": "high",
+        "voice": {"provider": "claude_native", "chord": None, "mode": "hold"},
     }
 
 

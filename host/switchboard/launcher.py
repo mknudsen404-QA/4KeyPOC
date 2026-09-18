@@ -240,6 +240,12 @@ def build_launch(
     title = agent.get("title") or f"Switchboard A{slot} {name}"
     shell_command = terminal_command(cwd, command, title, slot=slot)
 
+    if "voice" in agent:
+        voice = dict(agent["voice"])
+    else:
+        default = family_registry.get(family).default_voice()
+        voice = {"provider": default.provider, "chord": default.chord, "mode": default.mode}
+
     record_fields = {
         "slot": slot,
         "name": name,
@@ -248,5 +254,6 @@ def build_launch(
         "command": base_command,
         "terminal_title": title,
         "effort": effort_value,
+        "voice": voice,
     }
     return LaunchPlan(record_fields=record_fields, shell_command=shell_command)

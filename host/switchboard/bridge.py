@@ -50,10 +50,6 @@ def _default_log(message: str) -> None:
     print(message, flush=True)
 
 
-# macOS virtual keycode for the spacebar (used to drive Claude Code's /voice
-# hold-to-record mode).
-SPACE_KEYCODE = 49
-
 # BoardEvent names for which the Bridge probes liveness itself and injects
 # the result into the payload before handing the event to the (pure,
 # probe-free) reducer.
@@ -199,14 +195,19 @@ class Bridge:
             self.log(effect.message)
 
     def _apply_voice_key(self, effect: VoiceKey) -> None:
+        from switchboard.voice import registry as voice_registry
+        from switchboard.voice.base import VoiceContext
+
+        provider = voice_registry.get(effect.provider)
         pid = self.terminal.terminal_pid()
+        ctx = VoiceContext(pid=pid, key_injector=self.key_injector, chord=effect.chord, mode=effect.mode, log=self.log)
         if not effect.down:
-            self.key_injector.release(pid, SPACE_KEYCODE)
+            provider.release(ctx)
             return
         if effect.tty is not None and not self._wait_for_focus_settled(effect.tty):
             self.log(f"voice hold aborted: focus did not settle on {effect.tty} within {FOCUS_SETTLE_TIMEOUT_S}s")
             return
-        self.key_injector.hold(pid, SPACE_KEYCODE)
+        provider.hold(ctx)
 
     def _wait_for_focus_settled(self, tty: str) -> bool:
         deadline = time.monotonic() + FOCUS_SETTLE_TIMEOUT_S

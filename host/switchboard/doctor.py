@@ -23,6 +23,8 @@ from switchboard.launcher import load_agents_config, resolve_agent_cwd
 from switchboard.liveness import ProcessProber
 from switchboard.model import Liveness
 from switchboard.registry import Registry
+from switchboard.settings import VOICE_PROVIDERS
+from switchboard.voice import registry as voice_registry
 
 LAUNCH_AGENT_LABEL = "com.switchboard.bridge"
 
@@ -168,6 +170,19 @@ def check_accessibility() -> DoctorCheck:
     return DoctorCheck("Accessibility", "warn", "not trusted — grant Accessibility access for voice PTT")
 
 
+def check_voice_providers() -> DoctorCheck:
+    """Phase 4.2: real, live availability per provider (not a guess) —
+    feeds both this and the settings UI's /api/voice-providers from the
+    exact same switchboard.voice.registry."""
+    details = []
+    any_available = False
+    for name in VOICE_PROVIDERS:
+        availability = voice_registry.get(name).available()
+        any_available = any_available or availability.available
+        details.append(f"{name}: {'available' if availability.available else 'not available'} ({availability.detail})")
+    return DoctorCheck("voice providers", "ok" if any_available else "warn", "; ".join(details))
+
+
 def check_registry(registry_path: Path, *, prober: ProcessProber | None = None) -> DoctorCheck:
     slots = Registry(registry_path).load().get("slots", {})
     if not slots:
@@ -239,6 +254,7 @@ def run_checks(*, port: str | None, registry_path: Path, agents_config_path: Pat
         check_codex_hooks(),
         check_terminal_automation(),
         check_accessibility(),
+        check_voice_providers(),
         check_registry(registry_path),
         check_agents_config(agents_config_path),
         check_families(agents_config_path),

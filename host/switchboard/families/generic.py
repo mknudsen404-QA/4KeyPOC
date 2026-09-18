@@ -7,7 +7,7 @@ hooks, or voice.
 
 from __future__ import annotations
 
-from switchboard.families.base import Capabilities, Detection, HookSpec, detect_on_path
+from switchboard.families.base import Capabilities, Detection, HookSpec, VoiceSpec, detect_on_path
 
 
 class GenericProfile:
@@ -31,6 +31,11 @@ class GenericProfile:
 
     def hook_status_for(self, event: str) -> str | None:
         return None
+
+    def default_voice(self) -> VoiceSpec:
+        # hotkey (a system dictation app) works for any family, including
+        # one we don't recognise at all — that's the point of Phase 4.
+        return VoiceSpec(provider="hotkey")
 
     def capabilities(self) -> Capabilities:
         return Capabilities(hooks=False, effort=False, voice=False, tier="launch_only")

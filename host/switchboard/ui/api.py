@@ -11,16 +11,16 @@ from __future__ import annotations
 from switchboard.families import registry as family_registry
 from switchboard.registry import Registry
 from switchboard.settings import EFFORT_VALUES, VOICE_MODES, VOICE_PROVIDERS, SettingsValidationError, SlotSettingsService, validate_document
+from switchboard.voice import registry as voice_registry
 
-# Providers the schema accepts (settings.VOICE_PROVIDERS) vs. providers
-# actually wired up in the bridge today. Only "claude_native" is real
-# (bridge._apply_voice_key hardcodes hold-space for Claude); "hotkey" is
-# Phase 4 (VoiceProvider abstraction) and isn't implemented yet, so it's
-# reported unavailable rather than silently pretending it works.
-_VOICE_PROVIDER_INFO = {
-    "claude_native": {"display_name": "Claude native (hold Space)", "available": True},
-    "hotkey": {"display_name": "System dictation hotkey", "available": False},
-    "none": {"display_name": "None", "available": True},
+# Human-facing labels for the schema's voice provider vocabulary
+# (settings.VOICE_PROVIDERS). Availability itself comes from each
+# provider's own available() (switchboard.voice, Phase 4) — a real,
+# live-checked answer, not a static guess.
+_VOICE_PROVIDER_LABELS = {
+    "claude_native": "Claude native (hold Space)",
+    "hotkey": "System dictation hotkey",
+    "none": "None",
 }
 
 
@@ -69,6 +69,7 @@ def families_get() -> dict:
     for profile in family_registry.profiles():
         detection = profile.detect()
         caps = profile.capabilities()
+        default_voice = profile.default_voice()
         families.append({
             "name": profile.name,
             "display_name": profile.display_name,
@@ -79,6 +80,7 @@ def families_get() -> dict:
             "effort": caps.effort,
             "voice": caps.voice,
             "effort_values": list(EFFORT_VALUES) if caps.effort else [],
+            "default_voice_provider": default_voice.provider,
         })
     return {"families": families, "generic_tier": "launch_only"}
 
@@ -99,8 +101,14 @@ def status_get(registry: Registry) -> dict:
 
 
 def voice_providers_get() -> dict:
-    return {
-        "providers": [
-            {"name": name, "modes": list(VOICE_MODES), **info} for name, info in _VOICE_PROVIDER_INFO.items()
-        ]
-    }
+    providers = []
+    for name in VOICE_PROVIDERS:
+        availability = voice_registry.get(name).available()
+        providers.append({
+            "name": name,
+            "display_name": _VOICE_PROVIDER_LABELS.get(name, name),
+            "modes": list(VOICE_MODES),
+            "available": availability.available,
+            "detail": availability.detail,
+        })
+    return {"providers": providers}

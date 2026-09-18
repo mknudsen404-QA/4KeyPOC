@@ -97,7 +97,7 @@ def migrate_v1_to_v2(doc: dict) -> dict:
         if isinstance(number, int) and not (MIN_SLOT <= number <= MAX_SLOT):
             continue
         slot_doc: dict = {"slot": number}
-        for key in ("name", "family", "command", "cwd", "effort"):
+        for key in ("name", "family", "command", "cwd", "effort", "voice"):
             if agent.get(key) is not None:
                 slot_doc[key] = agent[key]
         slots.append(slot_doc)
@@ -121,13 +121,14 @@ def to_launch_config(doc: dict) -> dict:
     {...}}` shape launcher.build_launch already knows how to consume, so
     the launch pipeline itself doesn't need to change for v2 to work.
     `args` is joined onto `command` (shlex-quoted) since build_launch
-    still expects one shell command string; `voice`/`env` aren't
-    consumed by the launch pipeline yet.
+    still expects one shell command string. `voice` is passed through
+    as-is (Phase 4: build_launch resolves it against the family default
+    when absent); `env` still isn't consumed by the launch pipeline yet.
     """
     agents = []
     for slot_doc in doc.get("slots", []):
         agent: dict = {"slot": slot_doc.get("slot")}
-        for key in ("name", "family", "cwd", "effort"):
+        for key in ("name", "family", "cwd", "effort", "voice"):
             if slot_doc.get(key) is not None:
                 agent[key] = slot_doc[key]
         command = slot_doc.get("command")

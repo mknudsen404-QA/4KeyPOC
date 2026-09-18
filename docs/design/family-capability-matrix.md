@@ -58,6 +58,26 @@ say no for it until it is.
   launch-only (hooks disabled) rather than guessing at the TOML shape
   against a real install.
 
+## Phase 4 update (2026-09-18): voice provider availability, checked live
+
+The `VoiceProvider` abstraction (`switchboard/voice/`) is built and wired up.
+Its `hotkey` provider — the plan's recommended answer for Codex and every
+other non-Claude family — is **not available on this machine**, checked
+directly rather than assumed:
+
+- No known dictation app installed: `/Applications/Aqua Voice.app`,
+  `/Applications/Wispr Flow.app`, `/Applications/Superwhisper.app` — none
+  present.
+- macOS built-in Dictation has never been enabled: `defaults read -g
+  AppleDictationAutoEnable` returns "does not exist".
+
+`doctor` and the settings UI's `/api/voice-providers` both report this
+honestly. `claude_native` remains the only provider confirmed working live.
+Installing a dictation app (or enabling built-in Dictation) and re-running
+Phase 4.4's validation — a Codex slot with `provider: hotkey` actually
+recording and landing text in the Codex prompt on a hold — is the next real
+gap, not a code gap.
+
 ## Not yet verified (needs a real 10-minute session with the hook server logging raw payloads, per the plan)
 
 1. Gemini CLI: install for real (not the scratch npm prefix used here),

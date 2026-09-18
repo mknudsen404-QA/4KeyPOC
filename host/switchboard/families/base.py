@@ -46,6 +46,20 @@ class Capabilities:
     tier: str  # "full" | "status" | "launch_only"
 
 
+@dataclass(frozen=True)
+class VoiceSpec:
+    """A family's default voice provider for a slot that doesn't specify
+    one explicitly in agents.json (settings v2's `voice` field is
+    optional per slot — see switchboard/settings.py). Matches the shape
+    of that field, resolved to a provider name switchboard.voice's
+    registry understands.
+    """
+
+    provider: str
+    chord: str | None = None
+    mode: str = "hold"
+
+
 class FamilyProfile(Protocol):
     name: str
     display_name: str
@@ -56,6 +70,7 @@ class FamilyProfile(Protocol):
     def effort_args(self, effort: str) -> list[str]: ...
     def hook_spec(self) -> HookSpec | None: ...
     def hook_status_for(self, event: str) -> str | None: ...
+    def default_voice(self) -> VoiceSpec: ...
     def capabilities(self) -> Capabilities: ...
 
 

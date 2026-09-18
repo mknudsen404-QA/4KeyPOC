@@ -101,13 +101,31 @@ color/pulse.
 and the hook-installer's matcher table all derive from this one table —
 nothing else needs editing by hand.
 
-## Voice hold (Claude-only, needs a venv)
+## Voice hold (needs a venv)
 
-`voice.hold.start`/`voice.hold.stop` drive Claude Code's `/voice` hold-to-record
-mode for real: the bridge focuses the selected slot's Terminal tab, then posts
-a real synthetic spacebar keyDown on hold-start and keyUp on hold-stop — a
-true press-and-hold, not an atomic keystroke. This only works for
-`claude`-family slots; Codex's `/voice` support (if any) isn't scoped yet.
+`voice.hold.start`/`voice.hold.stop` drive whichever `switchboard/voice/`
+provider a slot resolves to (`host/switchboard/settings.py`'s optional
+per-slot `voice` field, defaulting to the slot's family — see
+`FamilyProfile.default_voice()`): the bridge focuses the selected slot's
+Terminal tab, then asks the provider to hold/release. Two providers are real
+today —
+
+- **`claude_native`** (Claude's own default): a true press-and-hold, a real
+  synthetic spacebar keyDown on hold-start and keyUp on hold-stop, driving
+  Claude Code's `/voice` hold-to-record mode. Confirmed working.
+- **`hotkey`** (Codex's default, and every other/unknown family's): drives a
+  system-wide dictation app's own shortcut instead, so it works regardless of
+  which CLI is running — but it's **not verified on this machine**: no known
+  dictation app is installed and macOS's built-in Dictation has never been
+  enabled here (see `switchboard/voice/hotkey.py`'s docstring for the exact
+  check). `doctor` and the settings UI's `/api/voice-providers` both report
+  this honestly as unavailable rather than pretending it works. It's also
+  currently limited to chords that map to a single bare keycode (just
+  `"space"` today) — multi-key chords like `ctrl+space` need modifier
+  support `key_injector.py`'s `KeyInjector` doesn't have yet.
+
+A slot with no usable provider (`"none"`, or an unconfigured/unavailable one)
+just logs that voice isn't set up for it — see `switchboard/voice/none.py`.
 
 **You must turn on `/voice` yourself, once per session, before using the PTT
 key.** The bridge does not do this for you. An earlier version tried to

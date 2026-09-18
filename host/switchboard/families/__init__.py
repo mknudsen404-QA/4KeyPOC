@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from switchboard.families.base import Capabilities, Detection, FamilyProfile, HookSpec
+from switchboard.families.base import Capabilities, Detection, FamilyProfile, HookSpec, VoiceSpec
 from switchboard.families.claude import ClaudeProfile
 from switchboard.families.codex import CodexProfile
 from switchboard.families.generic import GenericProfile
@@ -73,5 +73,6 @@ __all__ = [
     "Capabilities",
     "Detection",
     "HookSpec",
+    "VoiceSpec",
     "GenericProfile",
 ]

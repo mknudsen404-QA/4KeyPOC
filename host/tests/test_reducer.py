@@ -492,7 +492,11 @@ def test_reasoning_apply_sets_effort_only():
     assert SendUpdate("1") in effects
 
 
-def test_voice_hold_start_requires_claude_family():
+def test_voice_hold_start_requires_a_configured_voice_provider():
+    """Phase 4: voice capability is decided by the slot's resolved
+    `voice` field, not its family — a record with no `voice` (the
+    resolution the launch pipeline stores by default absent any
+    configured/available provider) never emits a VoiceKey."""
     slots = {"1": make_record(family="codex", terminal_tty="/dev/ttys001")}
     state = ReducerState()
     slots, effects = reduce(slots, state, BoardEvent("voice.hold.start", {"slot": 1}), NOW, auto_launch=False)
@@ -500,20 +504,40 @@ def test_voice_hold_start_requires_claude_family():
     assert state.mic_active is False
 
 
-def test_voice_hold_start_emits_focus_and_key_down():
-    slots = {"1": make_record(family="claude", terminal_tty="/dev/ttys001")}
+def test_voice_hold_start_provider_none_is_also_not_voice_capable():
+    slots = {"1": make_record(family="claude", terminal_tty="/dev/ttys001", voice={"provider": "none"})}
+    state = ReducerState()
+    slots, effects = reduce(slots, state, BoardEvent("voice.hold.start", {"slot": 1}), NOW, auto_launch=False)
+    assert not any(isinstance(e, VoiceKey) for e in effects)
+    assert state.mic_active is False
+
+
+def test_voice_hold_start_works_for_any_family_with_hotkey_provider():
+    """The point of Phase 4: a non-Claude (even generic) slot gets real
+    voice hold via the family-agnostic hotkey provider, driven purely by
+    the slot's resolved `voice` field."""
+    slots = {"1": make_record(family="codex", terminal_tty="/dev/ttys001", voice={"provider": "hotkey", "chord": "space", "mode": "hold"})}
     state = ReducerState()
     slots, effects = reduce(slots, state, BoardEvent("voice.hold.start", {"slot": 1}), NOW, auto_launch=False)
     assert Focus("/dev/ttys001") in effects
-    assert VoiceKey(True, "/dev/ttys001") in effects
+    assert VoiceKey(True, "/dev/ttys001", provider="hotkey", chord="space", mode="hold") in effects
+    assert state.mic_active is True
+
+
+def test_voice_hold_start_emits_focus_and_key_down():
+    slots = {"1": make_record(family="claude", terminal_tty="/dev/ttys001", voice={"provider": "claude_native"})}
+    state = ReducerState()
+    slots, effects = reduce(slots, state, BoardEvent("voice.hold.start", {"slot": 1}), NOW, auto_launch=False)
+    assert Focus("/dev/ttys001") in effects
+    assert VoiceKey(True, "/dev/ttys001", provider="claude_native", chord=None, mode="hold") in effects
     assert state.mic_active is True
 
 
 def test_voice_hold_stop_emits_key_up():
-    slots = {"1": make_record(family="claude", terminal_tty="/dev/ttys001")}
+    slots = {"1": make_record(family="claude", terminal_tty="/dev/ttys001", voice={"provider": "claude_native"})}
     state = ReducerState(mic_active=True)
     slots, effects = reduce(slots, state, BoardEvent("voice.hold.stop", {"slot": 1}), NOW, auto_launch=False)
-    assert VoiceKey(False) in effects
+    assert VoiceKey(False, provider="claude_native", chord=None, mode="hold") in effects
     assert state.mic_active is False
 
 

@@ -242,6 +242,21 @@ def test_check_accessibility_pyobjc_missing(monkeypatch):
     assert "pyobjc" in check.detail
 
 
+def test_check_voice_providers_ok_when_any_available():
+    check = doctor.check_voice_providers()
+    # claude_native is always available, so this is "ok" on any machine.
+    assert check.level == "ok"
+    assert "claude_native: available" in check.detail
+
+
+def test_check_voice_providers_warns_when_none_available(monkeypatch):
+    from switchboard.voice.base import Availability
+
+    monkeypatch.setattr(doctor.voice_registry, "get", lambda name: type("P", (), {"available": lambda self: Availability(False, "nope")})())
+    check = doctor.check_voice_providers()
+    assert check.level == "warn"
+
+
 def test_check_registry_all_alive(registry_path):
     from switchboard.model import slot_record
 

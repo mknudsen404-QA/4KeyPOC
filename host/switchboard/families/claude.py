@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from switchboard.families.base import Capabilities, Detection, HookSpec, detect_on_path
+from switchboard.families.base import Capabilities, Detection, HookSpec, VoiceSpec, detect_on_path
 from switchboard.status_table import CLAUDE_HOOK_STATUS, CLAUDE_SESSION_END_STATUS, HOOK_MATCHERS
 
 NAME = "claude"
@@ -51,6 +51,9 @@ class ClaudeProfile:
 
     def hook_status_for(self, event: str) -> str | None:
         return CLAUDE_HOOK_STATUS.get(event)
+
+    def default_voice(self) -> VoiceSpec:
+        return VoiceSpec(provider="claude_native")
 
     def capabilities(self) -> Capabilities:
         return Capabilities(hooks=True, effort=True, voice=True, tier="full")

@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from switchboard.families.base import Capabilities, Detection, HookSpec, detect_on_path
+from switchboard.families.base import Capabilities, Detection, HookSpec, VoiceSpec, detect_on_path
 from switchboard.status_table import CODEX_HOOK_EVENTS, CODEX_HOOK_STATUS, CODEX_SESSION_END_STATUS
 
 NAME = "codex"
@@ -49,6 +49,12 @@ class CodexProfile:
 
     def hook_status_for(self, event: str) -> str | None:
         return CODEX_HOOK_STATUS.get(event)
+
+    def default_voice(self) -> VoiceSpec:
+        # No native voice of its own — hotkey (a system dictation app) is
+        # the plan's recommended answer for Codex. Not verified live (no
+        # chord configured by default) — see voice/hotkey.py's docstring.
+        return VoiceSpec(provider="hotkey")
 
     def capabilities(self) -> Capabilities:
         return Capabilities(hooks=True, effort=True, voice=False, tier="status")

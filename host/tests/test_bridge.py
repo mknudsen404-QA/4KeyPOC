@@ -230,7 +230,7 @@ def test_close_dead_tabs_leaves_terminal_when_disabled(tmp_path):
 
 def test_voice_hold_start_holds_key_after_focus_settles(tmp_path):
     bridge, registry, device, terminal, prober, clock, key_injector = make_bridge(tmp_path)
-    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "terminal_tty": "/dev/ttys001"}}})
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "terminal_tty": "/dev/ttys001", "voice": {"provider": "claude_native"}}}})
 
     bridge.step(BoardEvent("voice.hold.start", {"slot": 1}))
 
@@ -240,7 +240,7 @@ def test_voice_hold_start_holds_key_after_focus_settles(tmp_path):
 
 def test_voice_hold_start_aborts_if_focus_never_settles(tmp_path):
     bridge, registry, device, terminal, prober, clock, key_injector = make_bridge(tmp_path)
-    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "terminal_tty": "/dev/ttys001"}}})
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "terminal_tty": "/dev/ttys001", "voice": {"provider": "claude_native"}}}})
 
     # Simulate Terminal never actually switching tabs (focus() still records
     # the call for the log line, but frontmost_tty() stays whatever it was).
@@ -254,7 +254,7 @@ def test_voice_hold_start_aborts_if_focus_never_settles(tmp_path):
 
 def test_voice_hold_stop_releases_key(tmp_path):
     bridge, registry, device, terminal, prober, clock, key_injector = make_bridge(tmp_path)
-    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "terminal_tty": "/dev/ttys001"}}})
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "terminal_tty": "/dev/ttys001", "voice": {"provider": "claude_native"}}}})
 
     bridge.step(BoardEvent("voice.hold.start", {"slot": 1}))
     bridge.step(BoardEvent("voice.hold.stop", {"slot": 1}))

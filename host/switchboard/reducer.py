@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from switchboard.events import BoardEvent, Event, HookEvent, LivenessObserved, Shutdown, SlotRegistered
 from switchboard.model import (
     BUSY_STATUSES,
-    VOICE_SUPPORTED_FAMILIES,
     Liveness,
     hook_status_for,
     set_status,
@@ -48,6 +47,14 @@ class VoiceKey(Effect):
     # for focus having actually settled on this tty before starting the
     # repeater, since Focus(tty) can return before Terminal has switched.
     tty: str | None = None
+    # Which switchboard.voice provider to drive — resolved once here from
+    # the slot record's `voice` field (itself resolved at launch time from
+    # either an explicit override or the family's default_voice()), not
+    # re-derived by Bridge. "none" (the default) means Bridge won't even
+    # get a VoiceKey — see _handle_voice_start's guard below.
+    provider: str = "none"
+    chord: str | None = None
+    mode: str = "hold"
 
 
 @dataclass(frozen=True)
@@ -210,6 +217,10 @@ def _handle_reasoning_apply(slots: dict[str, dict], state: ReducerState, payload
     return [SendUpdate(str(slot)), Log(f"Reasoning effort for agent {slot}: {effort} (applies on next launch)")]
 
 
+def _voice_config(record: dict) -> dict:
+    return record.get("voice") or {}
+
+
 def _handle_voice_start(slots: dict[str, dict], state: ReducerState, payload: dict) -> list[Effect]:
     slot = int(payload.get("slot", state.selected_slot or 0))
     if not slot:
@@ -217,24 +228,37 @@ def _handle_voice_start(slots: dict[str, dict], state: ReducerState, payload: di
     record = slots.get(str(slot))
     if not record:
         return [Log(f"Voice hold start: agent {slot} is not launched")]
-    family = record.get("family")
-    if family not in VOICE_SUPPORTED_FAMILIES:
-        return [Log(f"Voice hold: agent {slot} is '{family}', voice is Claude-only for now")]
+    voice = _voice_config(record)
+    provider = voice.get("provider", "none")
+    if provider == "none":
+        return [Log(f"Voice hold: agent {slot} has no voice provider configured")]
     tty = record.get("terminal_tty")
     if not tty or payload.get("liveness") == "dead":
         return [Log(f"Voice hold start: agent {slot} has no open terminal tab")]
     state.mic_active = True
-    return [Focus(tty), VoiceKey(True, tty), Log(f"Voice hold started for agent {slot}")]
+    return [
+        Focus(tty),
+        VoiceKey(True, tty, provider=provider, chord=voice.get("chord"), mode=voice.get("mode", "hold")),
+        Log(f"Voice hold started for agent {slot} via {provider}"),
+    ]
 
 
 def _handle_voice_stop(slots: dict[str, dict], state: ReducerState, payload: dict) -> list[Effect]:
     slot = int(payload.get("slot", state.selected_slot or 0))
     record = slots.get(str(slot)) if slot else None
-    if not record or record.get("family") not in VOICE_SUPPORTED_FAMILIES:
+    if not record:
+        state.mic_active = False
+        return [Log(f"Voice hold stop: agent {slot} is not a voice-capable slot")]
+    voice = _voice_config(record)
+    provider = voice.get("provider", "none")
+    if provider == "none":
         state.mic_active = False
         return [Log(f"Voice hold stop: agent {slot} is not a voice-capable slot")]
     state.mic_active = False
-    return [VoiceKey(False), Log(f"Voice hold stopped for agent {slot}")]
+    return [
+        VoiceKey(False, provider=provider, chord=voice.get("chord"), mode=voice.get("mode", "hold")),
+        Log(f"Voice hold stopped for agent {slot}"),
+    ]
 
 
 def _reduce_liveness_observed(slots: dict[str, dict], state: ReducerState, event: LivenessObserved) -> list[Effect]:

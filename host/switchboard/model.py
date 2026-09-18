@@ -43,11 +43,6 @@ def command_with_effort(base_command: str, family: str, effort: str | None) -> s
     return f"{base_command} {shlex.join(extra_args)}"
 
 
-# Voice hold is Claude-only for now — Codex's /voice support, if any,
-# hasn't been scoped.
-VOICE_SUPPORTED_FAMILIES = ("claude",)
-
-
 class Liveness(enum.Enum):
     ALIVE = "alive"
     DEAD = "dead"
@@ -65,6 +60,7 @@ def slot_record(
     now: int,
     effort: str = "medium",
     terminal_tty: str | None = None,
+    voice: dict | None = None,
 ) -> dict:
     return {
         "slot": slot,
@@ -78,6 +74,11 @@ def slot_record(
         "effort": normalize_effort(effort),
         "activity": "terminal launched",
         "last_launched_at": now,
+        # Resolved once at launch time (launcher.build_launch): the
+        # slot's explicit `voice` config, or its family's default_voice()
+        # — see switchboard/voice/ (Phase 4). {} means no provider, same
+        # as an explicit {"provider": "none"}.
+        "voice": voice or {},
     }
 
 
