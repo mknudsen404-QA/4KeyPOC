@@ -37,5 +37,8 @@ class GenericProfile:
         # one we don't recognise at all — that's the point of Phase 4.
         return VoiceSpec(provider="hotkey")
 
+    def slash_commands(self) -> tuple[str, ...]:
+        return ()
+
     def capabilities(self) -> Capabilities:
         return Capabilities(hooks=False, effort=False, voice=False, tier="launch_only")

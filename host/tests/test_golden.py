@@ -6,6 +6,7 @@ device.send() calls to the matching *.out.jsonl.
 Input line grammar (one JSON object per line):
 
     {"registry": {...}}                                    # optional first line: pre-seed the registry
+    {"family": {"1": "codex"}}                              # optional: override a slot's family (default "claude")
     {"t": 0,  "board": {"event": "agent.select", "slot": 1}}
     {"t": 1,  "hook": {"slot": 1, "event": "SessionStart", "body": {"session_id": "s-aaa"}}}
     {"t": 44, "liveness": {"1": "unknown"}}                # a LivenessObserved tick, as the ticker would submit
@@ -41,13 +42,21 @@ def run_trace(lines: list[dict], registry_path: Path) -> list[dict]:
     terminal = FakeTerminal()
     prober = FakeProber()
     clock = FakeClock()
+
+    # family defaults to "claude" (so hook_status_for has a mapping) for
+    # every slot; a trace can override per-slot via a {"family": {...}}
+    # line, e.g. to pin a real Codex session's hook sequence.
+    families = {n: "claude" for n in range(1, 4)}
+    for entry in lines:
+        if "family" in entry:
+            families.update({int(slot): family for slot, family in entry["family"].items()})
+
     launch_config = {
-        # family="claude" so lifecycle hooks map to a status (hook_status_for
-        # only knows claude/codex); command="cat" so resolve_command succeeds
-        # on any machine regardless of whether the real Claude Code CLI is
-        # installed — the family label, not the actual binary, drives hooks.
+        # command="cat" so resolve_command succeeds on any machine
+        # regardless of whether the real CLI is installed — the family
+        # label, not the actual binary, drives hooks.
         "agents": [
-            {"slot": n, "name": f"Agent {n}", "family": "claude", "command": "cat", "cwd": "/tmp"}
+            {"slot": n, "name": f"Agent {n}", "family": families[n], "command": "cat", "cwd": "/tmp"}
             for n in range(1, 4)
         ]
     }
@@ -60,6 +69,8 @@ def run_trace(lines: list[dict], registry_path: Path) -> list[dict]:
         if "registry" in entry:
             registry.save(entry["registry"])
             continue
+        if "family" in entry:
+            continue  # already applied above, before Bridge was built
         clock.t = 1_000_000 + entry["t"]
         if "board" in entry:
             board = dict(entry["board"])

@@ -47,11 +47,15 @@ def test_claude_effort_args_known_and_unknown_values():
     assert profile.effort_args("not-a-real-value") == ["--effort", "medium"]
 
 
-def test_codex_effort_args_clamps_top_tiers():
+def test_codex_effort_args_passes_through_all_five_values():
+    """Confirmed live (Phase 5): codex accepts every value without error."""
     profile = CodexProfile()
-    assert profile.effort_args("low") == ["-c", "model_reasoning_effort=low"]
-    assert profile.effort_args("xhigh") == ["-c", "model_reasoning_effort=high"]
-    assert profile.effort_args("max") == ["-c", "model_reasoning_effort=high"]
+    for value in ("low", "medium", "high", "xhigh", "max"):
+        assert profile.effort_args(value) == ["-c", f"model_reasoning_effort={value}"]
+
+
+def test_codex_effort_args_unknown_value_falls_back_to_medium():
+    assert CodexProfile().effort_args("not-a-real-value") == ["-c", "model_reasoning_effort=medium"]
 
 
 def test_generic_profile_has_every_capability_false():
@@ -88,10 +92,29 @@ def test_codex_hook_spec_matches_status_table():
         assert CodexProfile().hook_status_for(event) == status
 
 
-def test_capabilities_tiers():
+def test_capabilities_tiers(monkeypatch):
+    """Codex's tier is live, not hardcoded (Phase 5): it tracks whether
+    its default voice provider (hotkey) is actually available, rather
+    than a fixed "status" forever."""
+    from switchboard.voice.base import Availability
+
+    import switchboard.voice as voice_module
+
+    monkeypatch.setattr(voice_module.registry, "get", lambda name: type("P", (), {"available": lambda self: Availability(False)})())
     assert ClaudeProfile().capabilities().tier == "full"
     assert CodexProfile().capabilities().tier == "status"
     assert GenericProfile("kimi").capabilities().tier == "launch_only"
+
+    monkeypatch.setattr(voice_module.registry, "get", lambda name: type("P", (), {"available": lambda self: Availability(True)})())
+    assert CodexProfile().capabilities().tier == "full"
+    assert CodexProfile().capabilities().voice is True
+
+
+def test_slash_commands_gives_key_intents_a_home():
+    """Phase 5.4: log-only for now, but every profile exposes the method."""
+    assert ClaudeProfile().slash_commands() == ("voice",)
+    assert CodexProfile().slash_commands() == ()
+    assert GenericProfile("kimi").slash_commands() == ()
 
 
 def test_known_paths_map_only_lists_families_with_paths():
@@ -106,6 +129,8 @@ def test_registry_never_raises_on_arbitrary_name():
         profile.detect()
         profile.effort_args("high")
         profile.hook_status_for("Stop")
+        profile.default_voice()
+        profile.slash_commands()
         profile.capabilities()
 
 

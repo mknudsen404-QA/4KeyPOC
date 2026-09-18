@@ -16,11 +16,11 @@ say no for it until it is.
 | Capability | Claude | Codex | Gemini CLI | Kimi Code CLI |
 |---|---|---|---|---|
 | Binary / install / version tested | `claude` 2.1.271, `~/.local/bin/claude` | `codex-cli` 0.154.0-alpha.6.2, `/Applications/ChatGPT.app/Contents/Resources/codex` | `@google/gemini-cli` 0.59.0 (npm, scratch install, not installed for real use) | `kimi-code` — official install script or npm; not installed on this machine (docs-only) |
-| Lifecycle hooks: events | 9: `SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Notification, Stop, SessionEnd, SubagentStart, SubagentStop` (confirmed live, see `status_table.HOOK_MATCHERS`) | 5: `UserPromptSubmit, PermissionRequest, PostToolUse, Stop, SessionEnd` (confirmed live, `~/.codex/hooks.json` already has our entries) | 11 documented: `SessionStart, SessionEnd, BeforeAgent, AfterAgent, BeforeModel, AfterModel, BeforeToolSelection, BeforeTool, AfterTool, PreCompress, Notification` — **not run live** | 20 documented: `UserPromptSubmit, UserPromptQueued, PreToolUse, PostToolUse, PostToolUseFailure, Stop, TurnStarted, PermissionRequest, PermissionResult, SessionStart, SessionEnd, SessionHeartbeat, SubagentStart, SubagentStop, TaskStarted, StopFailure, Interrupt, PreCompact, PostCompact, Notification` — **not run live** |
+| Lifecycle hooks: events | 9: `SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Notification, Stop, SessionEnd, SubagentStart, SubagentStop` (confirmed live, see `status_table.HOOK_MATCHERS`) | **12 schema-known** (extracted from the installed binary's embedded JSON schema, `strings` on `codex`): `PreToolUse, PermissionRequest, PostToolUse, PreCompact, PostCompact, SessionStart, SessionEnd, UserPromptSubmit, SubagentStart, SubagentStop, Stop, Interrupt` — more than Phase 0 assumed. **Confirmed actually firing** in a real `codex exec` session (Phase 5, `--dangerously-bypass-hook-trust`): `UserPromptSubmit, PostToolUse, Stop, SessionEnd` (exact payload shapes recorded in `families/codex.py`'s module docstring and `tests/golden/codex_launch_turn_stop.*.jsonl`). `PermissionRequest` has a persisted trust entry on this machine (proof it fired at some point in real interactive use) but wasn't independently re-fired this pass — `exec` mode has no interactive approval to trigger it. **Confirmed NOT firing** even with every schema-known event wired to a logger and trust bypassed: `PreToolUse, PreCompact, PostCompact, SessionStart, SubagentStart, SubagentStop, Interrupt` — genuinely absent in this scenario, not a trust artifact. Real gotcha found along the way: hooks in `~/.codex/hooks.json` are gated by a persisted per-hook trust hash (`[hooks.state]` in `config.toml`); an interactive session establishes trust once, but `codex exec` silently no-ops any hook that isn't already trusted, with zero error output. | 11 documented: `SessionStart, SessionEnd, BeforeAgent, AfterAgent, BeforeModel, AfterModel, BeforeToolSelection, BeforeTool, AfterTool, PreCompress, Notification` — **not run live** | 20 documented: `UserPromptSubmit, UserPromptQueued, PreToolUse, PostToolUse, PostToolUseFailure, Stop, TurnStarted, PermissionRequest, PermissionResult, SessionStart, SessionEnd, SessionHeartbeat, SubagentStart, SubagentStop, TaskStarted, StopFailure, Interrupt, PreCompact, PostCompact, Notification` — **not run live** |
 | Hook config file / shape | `~/.claude/settings.json`, `hooks.<Event> = [{matcher, hooks:[{type:"command",command}]}]` — same shape Switchboard already merges by marker | `$CODEX_HOME/hooks.json` (`~/.codex/hooks.json`), same shape as Claude but no matcher support seen; Switchboard rewrites the whole group per event | `.gemini/settings.json` (project) / `~/.gemini/settings.json` (user) / `/etc/gemini-cli/settings.json` (system) — **identical JSON shape to Claude's**: `hooks.<Event> = [{matcher, hooks:[{name?, type:"command", command, timeout?}]}]`. Gemini even ships `gemini hooks migrate` to import a Claude Code `settings.json` directly. | `~/.kimi-code/config.toml`, a flat `[[hooks]]` TOML array — one table per rule (`event`, `matcher`, `command`, `timeout`), **not** grouped by event like Claude/Codex/Gemini. A new merge strategy (e.g. "TOML array, keyed by our command substring") is needed; the existing "rewrite by event" (Codex) and "merge by marker" (Claude) strategies don't fit as-is. |
 | Matcher support | Yes — exact string per event, `"|"`-joined for the `Notification` type filter | Not observed (Switchboard doesn't send one) | Yes — regex for `BeforeTool`/`AfterTool`, exact string for lifecycle events, `"*"`/`""` = wildcard | Yes — regex, optional per rule |
 | Per-session env passthrough (`SWITCHBOARD_SLOT`) | Yes (confirmed live — `X-Switchboard-Slot` header already flows end to end) | Yes (confirmed live) | **Unconfirmed** — the docs say hooks "are executed with a sanitized environment" and only guarantee `GEMINI_PROJECT_DIR`, `GEMINI_PLANS_DIR`, `GEMINI_SESSION_ID`, `GEMINI_CWD`, and a `CLAUDE_PROJECT_DIR` alias. `SWITCHBOARD_SLOT` may not survive; `GEMINI_SESSION_ID` could substitute for slot identification if a live test shows the env var doesn't. | **Unconfirmed** — docs don't mention environment passthrough at all; hook commands are plain shell commands so parent-env inheritance is likely but not documented or tested. |
-| Effort/reasoning flag and accepted values | `--effort {low,medium,high,xhigh,max}` (confirmed live) | `-c model_reasoning_effort=<value>`; only `low` confirmed against a real `config.toml` on this machine (current value: `medium`, also plausible). `xhigh`/`max` still unconfirmed for this key (see `model.CODEX_EFFORT_MAP`'s comment) — clamped to `high`. | **No CLI flag exists.** Effort-like control is `thinkingConfig.thinkingBudget` (an integer token count, not a tier) under `modelConfigs` in `settings.json` — a config-file edit, not a launch arg. No `-c key=value` equivalent was found in `--help` or the CLI reference. | **No CLI flag exists** either (`-c` is taken by `--continue`, not config-override). Effort is `[thinking].effort` in `config.toml`, vocabulary `low/medium/high/xhigh/max` (documented default `max`, falls back to the model's default if unsupported) — same 5-tier vocabulary Switchboard already uses, but only reachable by editing the CLI's own config file today, not a per-launch flag. |
+| Effort/reasoning flag and accepted values | `--effort {low,medium,high,xhigh,max}` (confirmed live) | `-c model_reasoning_effort=<value>`; **all five values confirmed live** (Phase 5: each one echoed back in the CLI's own startup banner, e.g. `codex exec -c model_reasoning_effort=xhigh` prints "reasoning effort: xhigh", no error for any of low/medium/high/xhigh/max). The earlier xhigh/max→high clamp is removed (`families/codex.py`'s `CODEX_EFFORT_VALUES`). Whether the override persists the whole session or only the first turn wasn't independently tested. | **No CLI flag exists.** Effort-like control is `thinkingConfig.thinkingBudget` (an integer token count, not a tier) under `modelConfigs` in `settings.json` — a config-file edit, not a launch arg. No `-c key=value` equivalent was found in `--help` or the CLI reference. | **No CLI flag exists** either (`-c` is taken by `--continue`, not config-override). Effort is `[thinking].effort` in `config.toml`, vocabulary `low/medium/high/xhigh/max` (documented default `max`, falls back to the model's default if unsupported) — same 5-tier vocabulary Switchboard already uses, but only reachable by editing the CLI's own config file today, not a per-launch flag. |
 | Native voice / dictation | `/voice`, hold-`Space` PTT (confirmed working today per this plan's header) | None known | **Experimental, off by default**: `experimental.voiceMode` setting; hold-`Space` PTT (`app.voiceModePTT` keybinding) once enabled; transcription backend `experimental.voice.backend` defaults to `"gemini-live"` (cloud) with a local Whisper option (`experimental.voice.whisperModel`). Same shape as Claude's native voice (hold-space in the focused terminal) — a real find, not something the plan's authors expected ("no native voice known" is wrong for Gemini once `voiceMode` is turned on). Not verified live. | None found in the docs read. |
 | Slash-command surface usable from a key | `/voice` (used today), plan/approve slash commands exist but unused by Switchboard | Unknown — Codex's TUI has no documented slash-command list found | `/hooks panel`, `/hooks enable-all`/`disable-all`, presumably `/voice` once enabled | `/model`, `/yolo`, `/auto` documented; no hook-management slash command found |
 | Session-end signal | `SessionEnd` (confirmed live) | `SessionEnd` (confirmed live) | `SessionEnd` — "Fires when the CLI exits or a session is cleared" | `SessionEnd` — "Session close/archive" |
@@ -28,9 +28,13 @@ say no for it until it is.
 ## Support tier (per the plan's definitions)
 
 - **Claude**: **Full** — hooks + effort + native voice. Already shipped.
-- **Codex**: **Status** — hooks + effort (with the xhigh/max clamp), voice
-  only via a future `hotkey` provider (Phase 4). Matches the plan's
-  expectation.
+- **Codex**: **Status** on this machine — hooks + all 5 effort tiers (no
+  clamp, Phase 5), voice via `hotkey` (Phase 4), which isn't available
+  here (no dictation app). `CodexProfile.capabilities()` computes this
+  live rather than hardcoding it: `doctor`/the settings UI report
+  **Full** automatically the moment a dictation app is installed —
+  verified by monkeypatching `available()` in `test_families.py`, not
+  yet by an actual install.
 - **Gemini CLI**: **Status**, provisionally — hooks exist (11 events,
   Claude-compatible config shape, even a Claude→Gemini hook migrator) but
   effort has no launch flag (config-file only, and not tier-based) and env
@@ -96,10 +100,13 @@ gap, not a code gap.
    overridden per-launch some way not covered by `--help` (e.g. a
    `KIMI_MODEL_THINKING_*` env var family — only `KIMI_MODEL_THINKING_KEEP`
    is documented, not an effort override).
-3. Codex: confirm `xhigh`/`max` against `model_reasoning_effort` with a
-   real session (today's config.toml only proves `medium` is accepted);
-   confirm whether `-c` overrides persist for the whole session or just
-   the first turn (Phase 5.2 in the plan).
+3. Codex: whether a `-c model_reasoning_effort=` override persists for
+   the whole session or only the first turn (xhigh/max acceptance itself
+   is now confirmed — Phase 5). Would need a scripted multi-turn
+   interactive session, not just `codex exec`'s single shot.
+4. Codex: install a real dictation app (or enable macOS Dictation) and
+   redo Phase 4.4's validation — a Codex slot with `provider: hotkey`
+   actually recording and landing text in the prompt.
 
 ## Sources
 
@@ -108,7 +115,14 @@ gap, not a code gap.
   `switchboard/model.py`.
 - Codex: `codex --help`, `codex-cli` 0.154.0-alpha.6.2 on this machine,
   `~/.codex/config.toml`, `~/.codex/hooks.json` (Switchboard's own
-  entries, already installed).
+  entries, already installed). Phase 5: `strings -a` on the installed
+  `codex` binary (it embeds its own hook-event JSON schema as literal
+  text — a `HookEventName` enum and `hooks.state`/`trusted_hash` config
+  keys), then a real `codex exec --dangerously-bypass-hook-trust` session
+  against a temporary `~/.codex/hooks.json` pointed at a throwaway local
+  HTTP logger (real hooks.json backed up first, restored immediately
+  after, verified byte-identical via `diff`) to see which schema-known
+  events actually fire.
 - Gemini CLI: `@google/gemini-cli@0.59.0` installed to a scratch npm
   prefix; `gemini --help`; bundled docs at
   `node_modules/@google/gemini-cli/bundle/docs/{hooks/index.md,

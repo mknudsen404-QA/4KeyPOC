@@ -55,5 +55,13 @@ class ClaudeProfile:
     def default_voice(self) -> VoiceSpec:
         return VoiceSpec(provider="claude_native")
 
+    def slash_commands(self) -> tuple[str, ...]:
+        # Only "voice" is actually used/verified by Switchboard today
+        # (default_voice() above). plan.approve/review.request/slash.run
+        # (Phase 5.4) stay log-only for every family — this just gives
+        # that future work a real, non-empty place to start from for
+        # Claude specifically, not a guess at its full command surface.
+        return ("voice",)
+
     def capabilities(self) -> Capabilities:
         return Capabilities(hooks=True, effort=True, voice=True, tier="full")

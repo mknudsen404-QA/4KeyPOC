@@ -356,6 +356,15 @@ already-open Terminal window won't pick up new hooks until restarted. See
 and its known gaps (credit to [OpenMicro](https://github.com/stephenleo/OpenMicro)
 for validating this approach).
 
+Codex specifically gates each configured hook command on a persisted
+"trust" hash (`[hooks.state]` in `~/.codex/config.toml`) — the first real
+interactive Codex session after `install-hooks` establishes that trust
+automatically; nothing else to do by hand. Confirmed live: `codex exec`
+(non-interactive) silently skips *untrusted* hooks with no error at all,
+which looks identical to "hooks just don't fire" unless you know to check
+`config.toml`'s `[hooks.state]` table or pass
+`--dangerously-bypass-hook-trust`.
+
 ## Doctor
 
 `doctor` probes the bridge's actual operating environment — nothing here

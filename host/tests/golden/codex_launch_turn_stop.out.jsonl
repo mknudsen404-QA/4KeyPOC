@@ -1,0 +1,6 @@
+{"activity": "terminal launched", "busy_elapsed_ms": 0, "effort": "medium", "event": "agent.update", "family": "codex", "name": "Agent 1", "slot": 1, "status": "launched"}
+{"activity": "terminal launched", "busy_elapsed_ms": 0, "effort": "medium", "event": "agent.update", "family": "codex", "name": "Agent 1", "slot": 1, "status": "working"}
+{"activity": "terminal launched", "busy_elapsed_ms": 0, "effort": "medium", "event": "agent.update", "family": "codex", "name": "Agent 1", "slot": 1, "status": "needs_input"}
+{"activity": "terminal launched", "busy_elapsed_ms": 0, "effort": "medium", "event": "agent.update", "family": "codex", "name": "Agent 1", "slot": 1, "status": "working"}
+{"activity": "terminal launched", "busy_elapsed_ms": 0, "effort": "medium", "event": "agent.update", "family": "codex", "name": "Agent 1", "slot": 1, "status": "done"}
+{"activity": "press to launch", "busy_elapsed_ms": 0, "effort": "medium", "event": "agent.update", "family": "slot", "name": "Agent 1", "slot": 1, "status": "empty"}

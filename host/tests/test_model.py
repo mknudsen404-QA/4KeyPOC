@@ -1,12 +1,14 @@
 from switchboard import model
 
 
-def test_effort_args_clamps_codex_xhigh_to_high():
-    assert model.effort_args("codex", "xhigh") == ["-c", "model_reasoning_effort=high"]
+def test_effort_args_codex_passes_through_xhigh():
+    """Confirmed live (Phase 5): codex accepts xhigh/max for
+    model_reasoning_effort without error, so these no longer clamp to high."""
+    assert model.effort_args("codex", "xhigh") == ["-c", "model_reasoning_effort=xhigh"]
 
 
-def test_effort_args_clamps_codex_max_to_high():
-    assert model.effort_args("codex", "max") == ["-c", "model_reasoning_effort=high"]
+def test_effort_args_codex_passes_through_max():
+    assert model.effort_args("codex", "max") == ["-c", "model_reasoning_effort=max"]
 
 
 def test_effort_args_claude_passes_through_known_values():

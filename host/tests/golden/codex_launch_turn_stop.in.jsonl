@@ -1,0 +1,7 @@
+{"family": {"1": "codex"}}
+{"t": 0, "board": {"event": "agent.select", "slot": 1}}
+{"t": 1, "hook": {"slot": 1, "event": "UserPromptSubmit", "body": {"session_id": "s-codex-1", "turn_id": "t-1", "cwd": "/tmp", "hook_event_name": "UserPromptSubmit", "model": "gpt-5.6-luna", "permission_mode": "bypassPermissions", "prompt": "List the files in the current directory."}}}
+{"t": 2, "hook": {"slot": 1, "event": "PermissionRequest", "body": {"session_id": "s-codex-1", "turn_id": "t-1", "tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/scratch"}}}}
+{"t": 5, "hook": {"slot": 1, "event": "PostToolUse", "body": {"session_id": "s-codex-1", "turn_id": "t-1", "tool_name": "Bash", "tool_input": {"command": "ls -la"}, "tool_response": "total 0\n", "tool_use_id": "exec-1"}}}
+{"t": 10, "hook": {"slot": 1, "event": "Stop", "body": {"session_id": "s-codex-1", "turn_id": "t-1", "stop_hook_active": false, "last_assistant_message": "done"}}}
+{"t": 11, "hook": {"slot": 1, "event": "SessionEnd", "body": {"session_id": "s-codex-1", "reason": "other"}}}
