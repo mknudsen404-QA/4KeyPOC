@@ -5,6 +5,27 @@
   var SLOTS = [1, 2, 3]; // key 4 is push-to-talk, not an agent slot
   var EFFORT_VALUES = ["low", "medium", "high", "xhigh", "max"];
 
+  // Mirrors the LED colors the board actually shows for each status
+  // (see status_table.py) so the UI's status pill and the board agree
+  // at a glance. Busy/unknown have no single fixed LED color (busy uses
+  // a ramp; unknown pulses) — "busy"/"unknown" here are just the closest
+  // static approximation.
+  var STATUS_PILL_CLASS = {
+    empty: "pill-muted",
+    launched: "pill-muted",
+    idle: "pill-muted",
+    thinking: "pill-busy",
+    working: "pill-busy",
+    waiting: "pill-warn",
+    needs_input: "pill-warn",
+    blocked: "pill-err",
+    done: "pill-ok",
+    unknown: "pill-unknown",
+  };
+
+  var TIER_PILL_CLASS = { full: "pill-ok", status: "pill-busy", launch_only: "pill-muted" };
+  var TIER_LABEL = { full: "Full", status: "Status", launch_only: "Launch-only" };
+
   var state = {
     document: null,
     versionToken: null,
@@ -28,7 +49,11 @@
 
   function setBridgeStatus(ok, text) {
     var el = $("#bridge-status");
-    el.textContent = text;
+    el.innerHTML = "";
+    var dot = document.createElement("span");
+    dot.className = "pill-dot";
+    el.appendChild(dot);
+    el.appendChild(document.createTextNode(text));
     el.className = "pill " + (ok ? "pill-ok" : "pill-err");
   }
 
@@ -81,10 +106,12 @@
     var doc = slotDoc(number);
     var live = statusFor(number);
 
-    $(".slot-title", node).textContent = "Slot " + number + " — key " + "ABC"[number - 1];
+    $(".keycap", node).textContent = String(number);
     $(".f-name", node).value = doc.name || "";
+    $(".f-name", node).placeholder = "Agent " + number;
 
     var familySelect = $(".f-family", node);
+    var badge = $(".f-badge", node);
     var knownNames = state.families.map(function (f) { return f.name; });
     var currentFamily = doc.family;
     var isCustom = currentFamily && knownNames.indexOf(currentFamily) === -1;
@@ -94,6 +121,17 @@
     var commandInput = $(".f-command", node);
     commandInput.value = doc.command || "";
 
+    function syncFamilyBadge() {
+      var fam = state.families.filter(function (f) { return f.name === familySelect.value; })[0];
+      if (!fam) {
+        badge.textContent = "";
+        badge.className = "f-badge field-note";
+        return;
+      }
+      badge.textContent = fam.detected ? "✓ found at " + fam.path : "not found on this machine";
+      badge.className = "f-badge field-note " + (fam.detected ? "ok" : "warn");
+    }
+
     function syncCommandVisibility() {
       var isCustomNow = familySelect.value === "__custom__";
       commandRow.hidden = !isCustomNow;
@@ -102,6 +140,7 @@
         // name == command name, e.g. "claude" -> claude, "codex" -> codex).
         commandInput.value = familySelect.value;
       }
+      syncFamilyBadge();
     }
     familySelect.addEventListener("change", syncCommandVisibility);
     syncCommandVisibility();
@@ -138,16 +177,20 @@
     voiceProviderSelect.addEventListener("change", syncVoiceVisibility);
     syncVoiceVisibility();
 
+    var statusWord = live ? live.status : "empty";
     var statusPill = $(".f-status", node);
-    if (live) {
-      statusPill.textContent = live.status;
-      statusPill.className = "f-status pill " + (live.status === "empty" ? "pill-muted" : "pill-ok");
-    } else {
-      statusPill.textContent = "empty";
-    }
+    statusPill.textContent = statusWord;
+    statusPill.className = "f-status pill " + (STATUS_PILL_CLASS[statusWord] || "pill-muted");
 
     var family = state.families.filter(function (f) { return f.name === (currentFamily || ""); })[0];
-    $(".f-tier", node).textContent = family ? "Tier: " + family.tier : "";
+    var tierPill = $(".f-tier", node);
+    if (family) {
+      tierPill.textContent = TIER_LABEL[family.tier] || family.tier;
+      tierPill.className = "f-tier pill " + (TIER_PILL_CLASS[family.tier] || "pill-muted");
+      tierPill.hidden = false;
+    } else {
+      tierPill.hidden = true;
+    }
 
     node.dataset.slot = String(number);
     return node;

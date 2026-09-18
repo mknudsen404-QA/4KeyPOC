@@ -9,55 +9,104 @@
 <body>
 <script>window.SWITCHBOARD_TOKEN = "{{TOKEN}}";</script>
 
-<header class="topbar">
-  <h1>Switchboard settings</h1>
-  <div id="bridge-status" class="pill pill-muted">checking bridge&hellip;</div>
-</header>
+<div class="page">
 
-<div id="banner" class="banner" hidden></div>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true">
+        <rect class="key key-a" x="2" y="2" width="16" height="16" rx="4"/>
+        <rect class="key key-b" x="22" y="2" width="16" height="16" rx="4"/>
+        <rect class="key key-c" x="2" y="22" width="16" height="16" rx="4"/>
+        <rect class="key key-ptt" x="22" y="22" width="16" height="16" rx="4"/>
+      </svg>
+      <div>
+        <h1>Switchboard</h1>
+        <p class="tagline">Slot settings</p>
+      </div>
+    </div>
+    <div id="bridge-status" class="pill pill-muted">
+      <span class="pill-dot"></span>checking bridge&hellip;
+    </div>
+  </header>
 
-<main id="slots"></main>
+  <div id="banner" class="banner" hidden></div>
 
-<section class="defaults-card card">
-  <h2>Defaults</h2>
-  <label>Folder <input id="default-cwd" type="text" placeholder="~/Documents"></label>
-  <label>Effort
-    <select id="default-effort"></select>
-  </label>
-</section>
+  <main id="slots"></main>
+
+  <section class="card defaults-card">
+    <h2>Defaults</h2>
+    <p class="card-subtitle">Used by any slot that doesn't set its own folder or effort.</p>
+    <div class="field-grid">
+      <label class="field">
+        <span class="field-label">Folder</span>
+        <input id="default-cwd" type="text" placeholder="~/Documents">
+      </label>
+      <label class="field">
+        <span class="field-label">Effort</span>
+        <select id="default-effort"></select>
+      </label>
+    </div>
+  </section>
+
+  <p class="hint">
+    <strong>Key 4 is push&#8209;to&#8209;talk</strong> — it isn't an agent slot, so it has no card here.
+    Changes below apply the next time a slot launches, not to a session already running.
+  </p>
+
+</div>
 
 <footer class="actions">
-  <button id="save-btn" type="button">Save</button>
+  <button id="save-btn" type="button">Save changes</button>
   <span id="save-status" class="save-status"></span>
 </footer>
 
-<p class="hint">Changes apply the next time a slot launches, not to a session already running. The 4th key is push-to-talk — not an agent slot — so it has no card here.</p>
-
 <template id="slot-card-template">
   <section class="card slot-card">
-    <h2 class="slot-title"></h2>
-    <label>Name <input class="f-name" type="text"></label>
-    <label>CLI
-      <select class="f-family"></select>
-    </label>
-    <label class="f-command-row">Command <input class="f-command" type="text"></label>
-    <div class="f-badge"></div>
-    <label>Folder <input class="f-cwd" type="text" placeholder="(use default)"></label>
-    <label>Effort
-      <select class="f-effort"></select>
-    </label>
-    <label>Push-to-talk
-      <select class="f-voice-provider"></select>
-    </label>
-    <div class="voice-fields" hidden>
-      <label>Chord <input class="f-voice-chord" type="text" placeholder="fn"></label>
-      <label>Mode
-        <select class="f-voice-mode"></select>
+    <div class="slot-head">
+      <span class="keycap"></span>
+      <input class="f-name slot-name" type="text" placeholder="Slot name">
+      <span class="f-status pill pill-muted"></span>
+    </div>
+
+    <div class="field-grid">
+      <label class="field">
+        <span class="field-label">CLI</span>
+        <select class="f-family"></select>
+        <span class="f-badge field-note"></span>
+      </label>
+      <label class="field f-command-row">
+        <span class="field-label">Command</span>
+        <input class="f-command" type="text" placeholder="custom-cli --flag">
+      </label>
+      <label class="field">
+        <span class="field-label">Folder</span>
+        <input class="f-cwd" type="text" placeholder="(use default)">
+      </label>
+      <label class="field">
+        <span class="field-label">Effort</span>
+        <select class="f-effort"></select>
       </label>
     </div>
+
+    <div class="voice-section">
+      <div class="voice-head">
+        <span class="field-label">Push-to-talk</span>
+        <select class="f-voice-provider"></select>
+      </div>
+      <div class="voice-fields" hidden>
+        <label class="field">
+          <span class="field-label">Chord</span>
+          <input class="f-voice-chord" type="text" placeholder="fn">
+        </label>
+        <label class="field">
+          <span class="field-label">Mode</span>
+          <select class="f-voice-mode"></select>
+        </label>
+      </div>
+    </div>
+
     <div class="slot-footer">
-      <span class="f-status pill pill-muted"></span>
-      <span class="f-tier"></span>
+      <span class="f-tier pill pill-muted"></span>
     </div>
   </section>
 </template>
