@@ -84,6 +84,46 @@ static void test_uncertain_pulses_regardless_of_selection() {
   assert(withDefault == explicitFalse);
 }
 
+static void test_idle_is_solid_without_an_override() {
+  assert(pulsePeriodFor(Status::Idle, 0) == 0UL);
+}
+
+static void test_idle_breathes_with_an_override() {
+  assert(pulsePeriodFor(Status::Idle, 0, BUSY_RAMP_MS, 7000UL) == 7000UL);
+  // breathFactor's raised-cosine wave starts at its dim floor (0.35) at
+  // phase 0 and peaks (1.0) at phase 0.5 — so nowMs=0 should be visibly
+  // dimmer than nowMs=half the period.
+  uint32_t atTrough = renderKey(Status::Idle, 0, /*selected=*/true, /*nowMs=*/0, false, BUSY_RAMP_MS, 7000UL);
+  uint32_t atPeak = renderKey(Status::Idle, 0, /*selected=*/true, /*nowMs=*/3500, false, BUSY_RAMP_MS, 7000UL);
+  assert((atTrough & 0xFF) < (atPeak & 0xFF));
+}
+
+static void test_idle_override_does_not_affect_other_statuses() {
+  // The override is Idle-specific — it must not leak into Done's own
+  // (solid) static pulse period.
+  assert(pulsePeriodFor(Status::Done, 0, BUSY_RAMP_MS, 7000UL) == 0UL);
+}
+
+static void test_busy_ramp_ms_override_speeds_up_the_whole_ramp() {
+  uint32_t fastRamp = 1000;  // finishes in 1s instead of the default 5min
+  expect_rgb_close(busyColor(0, fastRamp), SOFT_WHITE, 1, "busyColor(0, fastRamp)");
+  expect_rgb_close(busyColor(fastRamp, fastRamp), 0xFF00FF, 1, "busyColor(fastRamp, fastRamp)");
+  // Halfway through a fast ramp is already near the end of the hue sweep,
+  // which would still be firmly in the "white" phase on the default
+  // 5-minute ramp at the same elapsed time.
+  assert(busyHue(fastRamp / 2, fastRamp) > BUSY_START_HUE + 1.0f);
+  assert(busyHue(fastRamp / 2) == BUSY_START_HUE);  // unaffected: default ramp, same elapsed time
+}
+
+static void test_busy_pulse_period_scales_with_ramp_override() {
+  uint32_t fastRamp = 1000;
+  // At the very end of a fast ramp, the pulse should already be at its
+  // fastest (900ms) rather than partway through the default 5-minute
+  // slow-down.
+  assert(busyPulsePeriodMs(fastRamp, fastRamp) == 900UL);
+  assert(busyPulsePeriodMs(fastRamp) != 900UL);  // default ramp: barely progressed
+}
+
 int main() {
   test_hsv_to_rgb_reference();
   test_busy_color_endpoints();
@@ -94,6 +134,11 @@ int main() {
   test_pulse_periods();
   test_uncertain_overrides_status_with_amber();
   test_uncertain_pulses_regardless_of_selection();
+  test_idle_is_solid_without_an_override();
+  test_idle_breathes_with_an_override();
+  test_idle_override_does_not_affect_other_statuses();
+  test_busy_ramp_ms_override_speeds_up_the_whole_ramp();
+  test_busy_pulse_period_scales_with_ramp_override();
   printf("led_model_test: all tests passed\n");
   return 0;
 }

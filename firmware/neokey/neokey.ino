@@ -30,12 +30,20 @@ unsigned long slotBusyStartMs[AGENT_KEY_COUNT] = {0, 0, 0};
 bool slotUncertain[AGENT_KEY_COUNT] = {false, false, false};
 bool ptt_held = false;
 
+// Runtime LED pulse settings (see led.config below) — board-wide, applied
+// to every key. Defaults match led_model.h's own compiled-in behavior
+// (solid idle, the original 5-minute busy ramp), so a board that never
+// receives a led.config line (older bridge, or none connected yet)
+// renders exactly as it always has.
+unsigned long idlePulseOverrideMs = 0;
+uint32_t busyRampMs = BUSY_RAMP_MS;
+
 void redrawAgentKeys() {
   unsigned long now = millis();
   for (uint8_t i = 0; i < AGENT_KEY_COUNT; i++) {
     bool isSelected = (selectedSlot == AGENT_SLOTS[i]);
     uint32_t elapsed = statusIsBusy(slotStatus[i]) ? (uint32_t)(now - slotBusyStartMs[i]) : 0;
-    neokey.pixels.setPixelColor(i, renderKey(slotStatus[i], elapsed, isSelected, now, slotUncertain[i]));
+    neokey.pixels.setPixelColor(i, renderKey(slotStatus[i], elapsed, isSelected, now, slotUncertain[i], busyRampMs, idlePulseOverrideMs));
   }
 }
 
@@ -101,6 +109,13 @@ void pollIncomingSerial() {
               }
             }
             sendEvent("agent.update.ack", slot);
+          } else if (strcmp(eventName, "led.config") == 0) {
+            // Board-wide, applied on the next redrawAgentKeys() — no ack
+            // needed (unlike agent.update, nothing tracks delivery of this
+            // one; a value here is harmlessly re-sent on every bridge
+            // settings reload regardless of whether it actually changed).
+            idlePulseOverrideMs = doc["idle_pulse_ms"] | 0UL;
+            busyRampMs = doc["busy_ramp_ms"] | (uint32_t)BUSY_RAMP_MS;
           }
         }
       }

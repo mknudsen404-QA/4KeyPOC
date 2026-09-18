@@ -26,6 +26,23 @@
   var TIER_PILL_CLASS = { full: "pill-ok", status: "pill-busy", launch_only: "pill-muted" };
   var TIER_LABEL = { full: "Full", status: "Status", launch_only: "Launch-only" };
 
+  // Mirrors switchboard.settings.LED_IDLE_BREATHE_PRESETS /
+  // LED_THINKING_CYCLE_PRESETS — the board only ever sees the resolved
+  // millisecond values (led_config_wire), never these names, so this
+  // list is safe to extend on either side independently.
+  var LED_IDLE_BREATHE_OPTIONS = [
+    { value: "off", label: "Off (solid)" },
+    { value: "medium", label: "Medium (4s)" },
+    { value: "slow", label: "Slow (7s) — giant breath" },
+  ];
+  var LED_IDLE_BREATHE_MS = { off: 0, medium: 4000, slow: 7000 };
+  var LED_THINKING_CYCLE_OPTIONS = [
+    { value: "quick", label: "Quick (90s)" },
+    { value: "normal", label: "Normal (5 min)" },
+    { value: "slow", label: "Slow (10 min)" },
+  ];
+  var LED_THINKING_CYCLE_MS = { quick: 90000, normal: 300000, slow: 600000 };
+
   var state = {
     document: null,
     versionToken: null,
@@ -196,6 +213,16 @@
     return node;
   }
 
+  function updateLedPreview() {
+    var idleValue = $("#led-idle-breathe").value;
+    var cycleValue = $("#led-thinking-cycle").value;
+    var idleDot = $("#led-preview-idle");
+    var idleMs = LED_IDLE_BREATHE_MS[idleValue] || 0;
+    idleDot.classList.toggle("solid", idleMs === 0);
+    idleDot.style.setProperty("--led-idle-ms", idleMs + "ms");
+    $("#led-preview-busy").style.setProperty("--led-busy-ms", (LED_THINKING_CYCLE_MS[cycleValue] || 300000) + "ms");
+  }
+
   function render() {
     var container = $("#slots");
     container.innerHTML = "";
@@ -203,6 +230,11 @@
 
     fillSelect($("#default-effort"), EFFORT_VALUES.map(function (v) { return { value: v, label: v }; }), (state.document.defaults && state.document.defaults.effort) || "medium");
     $("#default-cwd").value = (state.document.defaults && state.document.defaults.cwd) || "";
+
+    var leds = state.document.leds || {};
+    fillSelect($("#led-idle-breathe"), LED_IDLE_BREATHE_OPTIONS, leds.idle_breathe || "off");
+    fillSelect($("#led-thinking-cycle"), LED_THINKING_CYCLE_OPTIONS, leds.thinking_cycle || "normal");
+    updateLedPreview();
   }
 
   function collectDocument() {
@@ -237,7 +269,13 @@
     if (defaultCwd) defaults.cwd = defaultCwd;
     if (defaultEffort) defaults.effort = defaultEffort;
 
-    return { settings_version: 2, defaults: defaults, slots: slots };
+    var leds = {};
+    var idleBreathe = $("#led-idle-breathe").value;
+    var thinkingCycle = $("#led-thinking-cycle").value;
+    if (idleBreathe) leds.idle_breathe = idleBreathe;
+    if (thinkingCycle) leds.thinking_cycle = thinkingCycle;
+
+    return { settings_version: 2, defaults: defaults, slots: slots, leds: leds };
   }
 
   function save() {
@@ -310,5 +348,7 @@
   }
 
   $("#save-btn").addEventListener("click", save);
+  $("#led-idle-breathe").addEventListener("change", updateLedPreview);
+  $("#led-thinking-cycle").addEventListener("change", updateLedPreview);
   loadAll();
 })();

@@ -8,7 +8,7 @@ from switchboard.settings import SettingsValidationError, SlotSettingsService
 
 def test_empty_document_shape():
     doc = settings.empty_document()
-    assert doc == {"settings_version": 2, "defaults": {}, "slots": []}
+    assert doc == {"settings_version": 2, "defaults": {}, "slots": [], "leds": {}}
 
 
 def test_migrate_v1_to_v2_renames_agents_to_slots_and_drops_title():
@@ -55,8 +55,16 @@ def test_migrate_drops_legacy_out_of_range_slot():
 
 
 def test_normalize_document_passes_through_existing_v2():
-    v2 = {"settings_version": 2, "defaults": {}, "slots": [{"slot": 1, "command": "cat"}]}
+    v2 = {"settings_version": 2, "defaults": {}, "slots": [{"slot": 1, "command": "cat"}], "leds": {}}
     assert settings.normalize_document(v2) == v2
+
+
+def test_normalize_document_adds_missing_leds_key():
+    """An older v2 document saved before this feature existed has no
+    `leds` key at all — normalize_document backfills it rather than
+    leaving callers to guess."""
+    v2 = {"settings_version": 2, "defaults": {}, "slots": []}
+    assert settings.normalize_document(v2)["leds"] == {}
 
 
 def test_normalize_document_migrates_v1():
@@ -81,6 +89,26 @@ def test_to_launch_config_joins_args_onto_command():
 def test_to_launch_config_no_args_leaves_command_bare():
     v2 = {"settings_version": 2, "defaults": {}, "slots": [{"slot": 1, "command": "claude"}]}
     assert settings.to_launch_config(v2)["agents"][0]["command"] == "claude"
+
+
+# --- led_config_wire ---------------------------------------------------------
+
+
+def test_led_config_wire_defaults_when_leds_missing():
+    doc = settings.empty_document()
+    assert settings.led_config_wire(doc) == {"idle_pulse_ms": 0, "busy_ramp_ms": 300000}
+
+
+def test_led_config_wire_resolves_named_presets():
+    doc = settings.empty_document()
+    doc["leds"] = {"idle_breathe": "slow", "thinking_cycle": "quick"}
+    assert settings.led_config_wire(doc) == {"idle_pulse_ms": 7000, "busy_ramp_ms": 90000}
+
+
+def test_led_config_wire_unknown_preset_falls_back_to_default():
+    doc = settings.empty_document()
+    doc["leds"] = {"idle_breathe": "extremely-fast", "thinking_cycle": "glacial"}
+    assert settings.led_config_wire(doc) == settings.led_config_wire(settings.empty_document())
 
 
 # --- SlotSettingsService round trip -----------------------------------------
@@ -252,3 +280,24 @@ def test_args_must_be_list_of_strings():
 def test_env_must_be_object_of_strings():
     errors = _errors_for({"slot": 1, "command": "cat", "env": {"KEY": 5}})
     assert any(e.path == "slots[0].env" and e.severity == "error" for e in errors)
+
+
+def test_unknown_idle_breathe_preset_is_an_error():
+    doc = settings.empty_document()
+    doc["leds"] = {"idle_breathe": "supersonic"}
+    errors = settings.validate_document(doc)
+    assert any(e.path == "leds.idle_breathe" and e.severity == "error" for e in errors)
+
+
+def test_unknown_thinking_cycle_preset_is_an_error():
+    doc = settings.empty_document()
+    doc["leds"] = {"thinking_cycle": "supersonic"}
+    errors = settings.validate_document(doc)
+    assert any(e.path == "leds.thinking_cycle" and e.severity == "error" for e in errors)
+
+
+def test_known_led_presets_are_fine():
+    doc = settings.empty_document()
+    doc["leds"] = {"idle_breathe": "slow", "thinking_cycle": "quick"}
+    errors = settings.validate_document(doc)
+    assert not any(e.path.startswith("leds") for e in errors)

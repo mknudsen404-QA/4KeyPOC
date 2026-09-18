@@ -262,6 +262,63 @@ def test_voice_hold_stop_releases_key(tmp_path):
     assert key_injector.released == [(1234, 49)]
 
 
+def test_startup_sync_sends_led_config_when_settings_path_given(tmp_path, monkeypatch):
+    from switchboard.settings import SlotSettingsService, empty_document
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "Documents").mkdir()
+    settings_path = tmp_path / "agents.json"
+    doc = empty_document()
+    doc["leds"] = {"idle_breathe": "slow", "thinking_cycle": "quick"}
+    SlotSettingsService(settings_path).save(doc)
+
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(
+        tmp_path, settings_path=settings_path,
+    )
+    bridge.startup_sync()
+
+    led_events = [e for e in device.sent if e.get("event") == "led.config"]
+    assert led_events == [{"event": "led.config", "idle_pulse_ms": 7000, "busy_ramp_ms": 90000}]
+    assert bridge.led_config == {"idle_pulse_ms": 7000, "busy_ramp_ms": 90000}
+
+
+def test_startup_sync_sends_no_led_config_without_settings_path(tmp_path):
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path)
+    bridge.startup_sync()
+    assert not any(e.get("event") == "led.config" for e in device.sent)
+    assert bridge.led_config is None
+
+
+def test_settings_reload_resends_led_config_on_change(tmp_path, monkeypatch):
+    from switchboard.settings import SlotSettingsService, empty_document
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "Documents").mkdir()
+    settings_path = tmp_path / "agents.json"
+    service = SlotSettingsService(settings_path)
+    doc = empty_document()
+    doc["slots"].append({"slot": 1, "name": "A", "family": "shell", "command": "cat"})
+    service.save(doc)
+
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(
+        tmp_path,
+        launch_config={"agents": [{"slot": 1, "name": "A", "family": "shell", "command": "cat"}]},
+        settings_path=settings_path,
+    )
+    bridge.startup_sync()
+    assert bridge.led_config == {"idle_pulse_ms": 0, "busy_ramp_ms": 300000}
+
+    doc = service.load()
+    doc["leds"] = {"idle_breathe": "medium"}
+    service.save(doc)
+
+    bridge.step(BoardEvent("agent.select", {"slot": 1}))  # any Launch triggers _apply_launch's force_check
+
+    assert bridge.led_config == {"idle_pulse_ms": 4000, "busy_ramp_ms": 300000}
+    led_events = [e for e in device.sent if e.get("event") == "led.config"]
+    assert led_events[-1] == {"event": "led.config", "idle_pulse_ms": 4000, "busy_ramp_ms": 300000}
+
+
 def test_settings_reload_before_launch_picks_up_change(tmp_path, monkeypatch):
     """Phase 2.4: a Launch always checks agents.json first, regardless of
     the 5s tick throttle, so a freshly-saved setting applies right away."""

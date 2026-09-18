@@ -33,6 +33,31 @@
 
   <main id="slots"></main>
 
+  <section class="card leds-card">
+    <h2>LED pulse</h2>
+    <p class="card-subtitle">Board-wide — applies to all three keys, not per slot.</p>
+    <div class="field-grid">
+      <label class="field">
+        <span class="field-label">Idle breathing</span>
+        <select id="led-idle-breathe"></select>
+      </label>
+      <label class="field">
+        <span class="field-label">Thinking cycle speed</span>
+        <select id="led-thinking-cycle"></select>
+      </label>
+    </div>
+    <div class="led-preview">
+      <div class="led-preview-item">
+        <span id="led-preview-idle" class="led-dot"></span>
+        <span class="led-preview-label">Idle</span>
+      </div>
+      <div class="led-preview-item">
+        <span id="led-preview-busy" class="led-dot led-dot-busy"></span>
+        <span class="led-preview-label">Thinking</span>
+      </div>
+    </div>
+  </section>
+
   <section class="card defaults-card">
     <h2>Defaults</h2>
     <p class="card-subtitle">Used by any slot that doesn't set its own folder or effort.</p>

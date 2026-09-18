@@ -562,6 +562,7 @@ Bridge -> board:
 
 ```json
 {"event":"agent.update","slot":1,"name":"Maestro","family":"claude","status":"working","effort":"medium","activity":"","busy_elapsed_ms":12345}
+{"event":"led.config","idle_pulse_ms":7000,"busy_ramp_ms":90000}
 ```
 
 `busy_elapsed_ms` is only nonzero while `status` is `working`/`thinking`,
@@ -571,6 +572,39 @@ and measures the **current turn** — it resets to 0 on every
 `sync` command) — never on a timer; the firmware advances the ramp locally
 between pushes using the elapsed time it derives from this value plus its
 own `millis()`.
+
+`led.config` is board-wide (not per-slot) and sent once at bridge startup
+plus whenever these settings change — see "LED pulse settings" below. An
+older firmware that doesn't recognise the event name just ignores the line
+(`pollIncomingSerial` silently drops any unmatched `event`), so this is
+safe to send regardless of what's actually flashed.
+
+## LED pulse settings
+
+Two board-wide presets, editable from the settings web UI (`switchboard
+settings`) or by hand in `agents.json`'s `"leds"` object:
+
+```json
+"leds": { "idle_breathe": "slow", "thinking_cycle": "quick" }
+```
+
+- **`idle_breathe`**: `"off"` (solid — the firmware's own default),
+  `"slow"` (7s, a "giant breath"), or `"medium"` (4s). Applies
+  `led_model.h`'s existing raised-cosine breathing wave (already used for
+  `needs_input`'s blink and the busy ramp's pulse) to the otherwise-solid
+  `idle` status.
+- **`thinking_cycle`**: `"quick"` (90s), `"normal"` (5min — the original,
+  unconfigured default), or `"slow"` (10min). Controls how long the busy
+  ramp (`thinking`/`working`'s white -> blue -> magenta color sweep, and
+  how fast its own pulse speeds up along the way) takes end to end.
+
+Both resolve host-side (`switchboard.settings.led_config_wire`) to the raw
+millisecond values in the `led.config` event above — the board only ever
+sees numbers, never preset names, so new presets can be added later
+without touching firmware. Takes effect within a few seconds of saving
+(the bridge's normal settings-reload tick); no relaunch or reflash needed
+for a settings change, only for the firmware feature itself to exist on a
+given board.
 
 ## Intended future events
 

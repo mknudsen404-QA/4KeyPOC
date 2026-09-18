@@ -288,6 +288,58 @@ select { cursor: pointer; }
 }
 .slot-footer .pill[hidden] { display: none; }
 
+/* ---- LED pulse card ------------------------------------------------------ */
+
+.leds-card .field-grid { grid-template-columns: 1fr 1fr; margin-bottom: 16px; }
+
+.led-preview {
+  display: flex;
+  gap: 26px;
+  align-items: center;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border);
+}
+
+.led-preview-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.led-preview-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.led-dot {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #8c8c8c;
+  box-shadow: 0 0 0 1px var(--border-strong) inset;
+  animation: led-breathe var(--led-idle-ms, 0ms) ease-in-out infinite;
+}
+.led-dot.solid { animation: none; opacity: 1; }
+
+.led-dot-busy {
+  animation-name: led-cycle;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-duration: var(--led-busy-ms, 300000ms);
+}
+
+@keyframes led-breathe {
+  0%, 100% { opacity: 0.35; transform: scale(0.82); }
+  50%      { opacity: 1;    transform: scale(1); }
+}
+
+@keyframes led-cycle {
+  0%   { background: #ffffff; }
+  34%  { background: #468cff; }
+  100% { background: #d000ff; }
+}
+
 /* ---- defaults + hint --------------------------------------------------- */
 
 .defaults-card .field-grid { grid-template-columns: 1fr 1fr; }
@@ -340,6 +392,6 @@ button:disabled { opacity: 0.45; cursor: default; }
 /* ---- narrow screens ------------------------------------------------------ */
 
 @media (max-width: 460px) {
-  .field-grid, .voice-fields, .defaults-card .field-grid { grid-template-columns: 1fr; }
+  .field-grid, .voice-fields, .defaults-card .field-grid, .leds-card .field-grid { grid-template-columns: 1fr; }
   .voice-head { grid-template-columns: 1fr; }
 }

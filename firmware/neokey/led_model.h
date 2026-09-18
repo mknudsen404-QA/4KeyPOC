@@ -16,7 +16,12 @@
 #define PI 3.14159265358979323846f
 #endif
 
-constexpr uint32_t BUSY_RAMP_MS = 300000;  // 5 min turn ramp
+constexpr uint32_t BUSY_RAMP_MS = 300000;  // 5 min turn ramp — the built-in
+                                            // default until a led.config
+                                            // event overrides it (see
+                                            // neokey.ino's busyRampMs global
+                                            // and host/switchboard/settings.py's
+                                            // LED_THINKING_CYCLE_PRESETS).
 constexpr float BUSY_START_HUE = 210.0f;   // cool blue
 constexpr float BUSY_END_HUE = 300.0f;     // magenta — never past 300 (into red)
 constexpr float WHITE_PHASE = 1.0f / 3.0f; // first third of the ramp: white -> blue (saturation ramp)
@@ -36,10 +41,14 @@ inline uint32_t hsvToRgb(float h, float s, float v) {
   return ((uint32_t)((r + m) * 255) << 16) | ((uint32_t)((g + m) * 255) << 8) | (uint32_t)((b + m) * 255);
 }
 
-// Smoothstep-eased progress (0..1) through the busy ramp.
-inline float busyRampProgress(uint32_t elapsedMs) {
-  uint32_t capped = elapsedMs < BUSY_RAMP_MS ? elapsedMs : (uint32_t)BUSY_RAMP_MS;
-  float t = (float)capped / (float)BUSY_RAMP_MS;
+// Smoothstep-eased progress (0..1) through the busy ramp. `rampMs` lets a
+// runtime override (led.config, see neokey.ino) speed up or slow down the
+// whole ramp — and, since busyPulsePeriodMs derives its pulse speed from
+// this same progress, the pulse too — without changing its shape.
+inline float busyRampProgress(uint32_t elapsedMs, uint32_t rampMs = BUSY_RAMP_MS) {
+  if (rampMs == 0) rampMs = 1;  // guard against a zero override; never divide by zero
+  uint32_t capped = elapsedMs < rampMs ? elapsedMs : rampMs;
+  float t = (float)capped / (float)rampMs;
   return t * t * (3.0f - 2.0f * t);
 }
 
@@ -48,42 +57,46 @@ inline float busyRampProgress(uint32_t elapsedMs) {
 // Exposed separately (rather than folded straight into busyColor) so tests
 // can check the hue/saturation the ramp actually chose without having to
 // reverse-engineer them out of an RGB value.
-inline float busyHue(uint32_t elapsedMs) {
-  float t = busyRampProgress(elapsedMs);
+inline float busyHue(uint32_t elapsedMs, uint32_t rampMs = BUSY_RAMP_MS) {
+  float t = busyRampProgress(elapsedMs, rampMs);
   if (t < WHITE_PHASE) return BUSY_START_HUE;
   float u = (t - WHITE_PHASE) / (1.0f - WHITE_PHASE);
   return BUSY_START_HUE + (BUSY_END_HUE - BUSY_START_HUE) * u;
 }
 
-inline float busySaturation(uint32_t elapsedMs) {
-  float t = busyRampProgress(elapsedMs);
+inline float busySaturation(uint32_t elapsedMs, uint32_t rampMs = BUSY_RAMP_MS) {
+  float t = busyRampProgress(elapsedMs, rampMs);
   if (t < WHITE_PHASE) return t / WHITE_PHASE;
   return 1.0f;
 }
 
-inline float busyValue(uint32_t elapsedMs) {
-  float t = busyRampProgress(elapsedMs);
+inline float busyValue(uint32_t elapsedMs, uint32_t rampMs = BUSY_RAMP_MS) {
+  float t = busyRampProgress(elapsedMs, rampMs);
   if (t < WHITE_PHASE) return 0.55f + 0.45f * (t / WHITE_PHASE);
   return 1.0f;
 }
 
-inline uint32_t busyColor(uint32_t elapsedMs) {
-  return hsvToRgb(busyHue(elapsedMs), busySaturation(elapsedMs), busyValue(elapsedMs));
+inline uint32_t busyColor(uint32_t elapsedMs, uint32_t rampMs = BUSY_RAMP_MS) {
+  return hsvToRgb(busyHue(elapsedMs, rampMs), busySaturation(elapsedMs, rampMs), busyValue(elapsedMs, rampMs));
 }
 
-inline unsigned long busyPulsePeriodMs(uint32_t elapsedMs) {
+inline unsigned long busyPulsePeriodMs(uint32_t elapsedMs, uint32_t rampMs = BUSY_RAMP_MS) {
   const unsigned long startMs = 4000UL;  // slow "giant heartbeat"
   const unsigned long endMs = 900UL;     // quick pulse
-  float t = busyRampProgress(elapsedMs);
+  float t = busyRampProgress(elapsedMs, rampMs);
   return startMs - (unsigned long)((startMs - endMs) * t);
 }
 
 // 0 means "solid" (no pulse) to the caller. The static (non-busy) periods
-// come from status_table.h's generated staticPulseMsFor(); only the busy
-// ramp's own period (which needs elapsedMs, not a per-status constant)
-// stays hand-written here.
-inline unsigned long pulsePeriodFor(Status s, uint32_t elapsedMs) {
-  if (statusIsBusy(s)) return busyPulsePeriodMs(elapsedMs);
+// come from status_table.h's generated staticPulseMsFor() UNLESS
+// `idleOverrideMs` is nonzero and `s` is Idle, in which case that wins —
+// a runtime led.config choice (e.g. a slow "breathing" idle) overriding
+// the compiled-in default (solid) without needing a firmware rebuild. The
+// busy ramp's own period (which needs elapsedMs, not a per-status
+// constant) stays hand-written here.
+inline unsigned long pulsePeriodFor(Status s, uint32_t elapsedMs, uint32_t rampMs = BUSY_RAMP_MS, unsigned long idleOverrideMs = 0) {
+  if (statusIsBusy(s)) return busyPulsePeriodMs(elapsedMs, rampMs);
+  if (s == Status::Idle && idleOverrideMs != 0) return idleOverrideMs;
   return staticPulseMsFor(s);
 }
 
@@ -131,14 +144,20 @@ inline uint32_t applySelectionFloor(uint32_t color, bool selected) {
 // for this slot (two consecutive UNKNOWN probes — see the reducer), so the
 // LED may be lying about `s`. When true, render Status::Unknown's amber
 // with its 3000ms pulse regardless of what `s` actually is.
-inline uint32_t renderKey(Status s, uint32_t elapsedMs, bool selected, unsigned long nowMs, bool uncertain = false) {
+//
+// `rampMs` and `idleOverrideMs` are the two runtime LED-pulse settings
+// (see led.config in neokey.ino): how long the busy color ramp takes, and
+// whether Idle breathes instead of sitting solid. Both default to the
+// firmware's original, hardcoded behaviour, so every existing call site
+// (and every existing test) is unaffected until it opts in.
+inline uint32_t renderKey(Status s, uint32_t elapsedMs, bool selected, unsigned long nowMs, bool uncertain = false, uint32_t rampMs = BUSY_RAMP_MS, unsigned long idleOverrideMs = 0) {
   if (uncertain) {
     uint32_t color = applySelectionFloor(colorForStatus(Status::Unknown), selected);
-    return scaleColor(color, breathFactor(nowMs, pulsePeriodFor(Status::Unknown, elapsedMs)));
+    return scaleColor(color, breathFactor(nowMs, pulsePeriodFor(Status::Unknown, elapsedMs, rampMs, idleOverrideMs)));
   }
-  uint32_t base = statusIsBusy(s) ? busyColor(elapsedMs) : colorForStatus(s);
+  uint32_t base = statusIsBusy(s) ? busyColor(elapsedMs, rampMs) : colorForStatus(s);
   uint32_t color = applySelectionFloor(base, selected);
-  unsigned long period = pulsePeriodFor(s, elapsedMs);
+  unsigned long period = pulsePeriodFor(s, elapsedMs, rampMs, idleOverrideMs);
   if (period != 0) {
     color = scaleColor(color, breathFactor(nowMs, period));
   }

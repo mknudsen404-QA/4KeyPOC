@@ -12,7 +12,8 @@ v1 shape (still readable, never written by this module):
 v2 shape (what SlotSettingsService always reads/writes):
     {"settings_version": 2, "defaults": {"cwd", "effort"},
      "slots": [{"slot", "name", "family", "command", "args", "cwd",
-     "effort", "voice": {"provider", "chord", "mode"}, "env"}, ...]}
+     "effort", "voice": {"provider", "chord", "mode"}, "env"}, ...],
+     "leds": {"idle_breathe", "thinking_cycle"}}
 
 `family` is optional (inferred from `command`'s basename at launch time —
 see families.FamilyRegistry.infer); `args` is separate from `command` so
@@ -20,6 +21,16 @@ a UI can offer a command dropdown plus a free-text args field; `title` is
 dropped in v2 (regenerated from name/slot, same as launcher.build_launch
 already does when an agent has no `title`); `voice`/`env` are new,
 consumed starting in later phases.
+
+`leds` is global (board-wide), not per-slot — LEDs communicate status,
+not per-agent identity, so one consistent pulse feel across all three
+keys is the design choice (see the "LED pulse settings" section of
+docs/design/slot-settings-and-family-parity-plan.md's follow-up work).
+Its two named presets each resolve (led_config_wire()) to the raw
+millisecond values firmware/neokey/led_model.h actually understands,
+sent to the board as a `led.config` event whenever they change — the
+board never sees preset names, so the two vocabularies can evolve
+independently.
 
 See docs/design/slot-settings-and-family-parity-plan.md Phase 2.
 """
@@ -53,6 +64,18 @@ VOICE_MODES = ("hold", "toggle")
 MIN_SLOT = 1
 MAX_SLOT = 3
 
+# Board-wide LED pulse presets. Values are milliseconds the firmware
+# understands directly (see firmware/neokey/led_model.h): idle_breathe's
+# value is a static pulse period for the idle status (0 = solid, the
+# firmware's own built-in default if a board never receives led.config
+# at all); thinking_cycle's value is how long the busy-status color ramp
+# (white -> blue -> magenta) takes end to end, which also scales how
+# fast its pulse speeds up along the way (see busyPulsePeriodMs).
+LED_IDLE_BREATHE_PRESETS = {"off": 0, "slow": 7000, "medium": 4000}
+LED_THINKING_CYCLE_PRESETS = {"quick": 90000, "normal": 300000, "slow": 600000}
+LED_IDLE_BREATHE_DEFAULT = "off"
+LED_THINKING_CYCLE_DEFAULT = "normal"
+
 
 @dataclass(frozen=True)
 class FieldError:
@@ -73,7 +96,22 @@ def _normalize_effort(effort: str | None) -> str:
 
 
 def empty_document() -> dict:
-    return {"settings_version": SETTINGS_VERSION, "defaults": {}, "slots": []}
+    return {"settings_version": SETTINGS_VERSION, "defaults": {}, "slots": [], "leds": {}}
+
+
+def led_config_wire(doc: dict) -> dict:
+    """Resolve `doc["leds"]`'s preset names to the raw millisecond values
+    firmware/neokey/led_model.h actually understands. Always returns both
+    keys (falling back to the documented defaults) so a caller can send
+    this straight to the board without checking for missing fields.
+    """
+    leds = doc.get("leds") or {}
+    idle_name = leds.get("idle_breathe", LED_IDLE_BREATHE_DEFAULT)
+    cycle_name = leds.get("thinking_cycle", LED_THINKING_CYCLE_DEFAULT)
+    return {
+        "idle_pulse_ms": LED_IDLE_BREATHE_PRESETS.get(idle_name, LED_IDLE_BREATHE_PRESETS[LED_IDLE_BREATHE_DEFAULT]),
+        "busy_ramp_ms": LED_THINKING_CYCLE_PRESETS.get(cycle_name, LED_THINKING_CYCLE_PRESETS[LED_THINKING_CYCLE_DEFAULT]),
+    }
 
 
 def migrate_v1_to_v2(doc: dict) -> dict:
@@ -101,7 +139,7 @@ def migrate_v1_to_v2(doc: dict) -> dict:
             if agent.get(key) is not None:
                 slot_doc[key] = agent[key]
         slots.append(slot_doc)
-    return {"settings_version": SETTINGS_VERSION, "defaults": defaults, "slots": slots}
+    return {"settings_version": SETTINGS_VERSION, "defaults": defaults, "slots": slots, "leds": {}}
 
 
 def normalize_document(raw: dict) -> dict:
@@ -112,6 +150,7 @@ def normalize_document(raw: dict) -> dict:
         doc = dict(raw)
         doc.setdefault("defaults", {})
         doc.setdefault("slots", [])
+        doc.setdefault("leds", {})
         return doc
     return migrate_v1_to_v2(raw)
 
@@ -151,6 +190,15 @@ def validate_document(doc: dict) -> list[FieldError]:
         defaults = {}
     if "effort" in defaults and _normalize_effort(defaults["effort"]) not in EFFORT_VALUES:
         errors.append(FieldError("defaults.effort", f"must be one of {EFFORT_VALUES}"))
+
+    leds = doc.get("leds", {})
+    if not isinstance(leds, dict):
+        errors.append(FieldError("leds", "must be an object"))
+        leds = {}
+    if "idle_breathe" in leds and leds["idle_breathe"] not in LED_IDLE_BREATHE_PRESETS:
+        errors.append(FieldError("leds.idle_breathe", f"must be one of {tuple(LED_IDLE_BREATHE_PRESETS)}"))
+    if "thinking_cycle" in leds and leds["thinking_cycle"] not in LED_THINKING_CYCLE_PRESETS:
+        errors.append(FieldError("leds.thinking_cycle", f"must be one of {tuple(LED_THINKING_CYCLE_PRESETS)}"))
 
     slots = doc.get("slots", [])
     if not isinstance(slots, list):

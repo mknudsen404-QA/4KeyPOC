@@ -88,6 +88,11 @@ class Bridge:
         # dict (every test, and any caller that doesn't opt in) keeps that
         # dict forever, unchanged.
         self.settings_path = settings_path
+        # The board-wide LED pulse config last sent to the board (Phase
+        # "LED pulse settings") — None until startup_sync()'s unconditional
+        # first send. Kept mainly for tests/inspection; re-sending an
+        # unchanged value on every settings reload is harmless.
+        self.led_config: dict | None = None
         self._settings_token = self._settings_version_token() if settings_path is not None else None
         # Baselined at construction time (not 0.0) so the throttle actually
         # throttles from startup instead of every bridge treating its first
@@ -171,6 +176,13 @@ class Bridge:
                 )
                 reg["slots"] = new_slots
             snapshot = copy.deepcopy(reg.get("slots", {}))
+        if self.settings_path is not None:
+            from switchboard.settings import SlotSettingsService
+
+            # Unconditional (not the token-change check _maybe_reload_settings
+            # uses): the board needs this on every fresh connection, not just
+            # when the file has changed since some earlier bridge run.
+            self._send_led_config(SlotSettingsService(self.settings_path).load())
         for slot in range(1, 4):
             self._apply(SendUpdate(str(slot)), snapshot)
 
@@ -244,8 +256,25 @@ class Bridge:
         self._settings_token = token
         from switchboard.settings import SlotSettingsService, to_launch_config
 
-        self.launch_config = to_launch_config(SlotSettingsService(self.settings_path).load())
+        doc = SlotSettingsService(self.settings_path).load()
+        self.launch_config = to_launch_config(doc)
+        self._send_led_config(doc)
         self.log("settings reloaded")
+
+    def _send_led_config(self, doc: dict) -> None:
+        """Send the board-wide LED pulse config (idle-breathe period, busy
+        color-ramp duration — see settings.led_config_wire) as a
+        `led.config` event. Firmware/neokey/neokey.ino stores whatever it
+        last received and keeps its own compiled-in defaults (solid idle,
+        the original 5-minute ramp) until the first one arrives, so an
+        older board that doesn't understand this event yet just ignores
+        the unrecognised line and keeps working exactly as before.
+        """
+        from switchboard.settings import led_config_wire
+
+        wire = led_config_wire(doc)
+        self.device.send({"event": "led.config", **wire})
+        self.led_config = wire
 
     def ui_token_path(self) -> Path:
         """Where `run()` writes the settings UI's per-run token (Phase 3),
