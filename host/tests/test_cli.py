@@ -250,6 +250,51 @@ def test_rotate_bridge_out_log_overwrites_old_backup(tmp_path, monkeypatch):
     assert (tmp_path / "bridge.out.log.1").read_text() == "x" * 2000
 
 
+def test_support_bundle_parse_duration_accepts_units():
+    from datetime import timedelta
+
+    assert cli._parse_duration("30m") == timedelta(minutes=30)
+    assert cli._parse_duration("2h") == timedelta(hours=2)
+    assert cli._parse_duration("3d") == timedelta(days=3)
+    assert cli._parse_duration("45s") == timedelta(seconds=45)
+
+
+def test_support_bundle_parse_duration_rejects_garbage():
+    import pytest
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli._parse_duration("not-a-duration")
+
+
+def test_support_bundle_command_writes_to_requested_out_path(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("SWITCHBOARD_LOG_DIR", str(tmp_path / "logs"))
+    out_path = tmp_path / "custom.zip"
+    args = cli.build_parser().parse_args(
+        [
+            "support-bundle", "--out", str(out_path),
+            "--registry", str(tmp_path / "registry.json"),
+            "--agents-config", str(tmp_path / "agents.json"),
+        ]
+    )
+    result = cli.support_bundle_command(args)
+    assert result == 0
+    assert out_path.exists()
+    assert capsys.readouterr().out.strip() == str(out_path)
+
+
+def test_support_bundle_command_defaults_out_to_desktop(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("SWITCHBOARD_LOG_DIR", str(tmp_path / "logs"))
+    (tmp_path / "Desktop").mkdir()
+    args = cli.build_parser().parse_args(
+        ["support-bundle", "--registry", str(tmp_path / "registry.json"), "--agents-config", str(tmp_path / "agents.json")]
+    )
+    cli.support_bundle_command(args)
+    produced = list((tmp_path / "Desktop").glob("switchboard-support-*.zip"))
+    assert len(produced) == 1
+
+
 def test_rotate_bridge_out_log_missing_file_is_a_noop(tmp_path, monkeypatch):
     monkeypatch.setenv("SWITCHBOARD_LOG_DIR", str(tmp_path))
     cli._rotate_bridge_out_log()  # must not raise when nothing has ever been logged yet

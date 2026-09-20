@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from switchboard.clock import SystemClock
@@ -421,6 +423,31 @@ def _add_listen_flags(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _parse_duration(text: str) -> timedelta:
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([smhd])", text.strip())
+    if not match:
+        raise argparse.ArgumentTypeError(f"invalid duration {text!r} — expected e.g. 30m, 2h, 3d")
+    value, unit = match.groups()
+    seconds = float(value) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
+    return timedelta(seconds=seconds)
+
+
+def support_bundle_command(args: argparse.Namespace) -> int:
+    from switchboard.support_bundle import build_bundle
+
+    out = args.out or (Path.home() / "Desktop" / f"switchboard-support-{datetime.now().strftime('%Y%m%d-%H%M')}.zip")
+    path = build_bundle(
+        out=out,
+        since=args.since,
+        registry_path=args.registry,
+        agents_config_path=args.agents_config,
+        port=args.port,
+        include_payloads=args.include_payloads,
+    )
+    print(path)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Switchboard host bridge.")
     parser.set_defaults(command_name="listen", func=listen)
@@ -512,6 +539,20 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
     doctor_parser.add_argument("--agents-config", type=Path, default=DEFAULT_AGENTS_CONFIG)
     doctor_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON instead of text lines")
+
+    bundle_parser = subcommands.add_parser(
+        "support-bundle", help="Zip logs, doctor output, and config into one file for diagnosing a bug"
+    )
+    bundle_parser.set_defaults(func=support_bundle_command)
+    bundle_parser.add_argument("--out", type=Path, help="Output zip path (default: ~/Desktop/switchboard-support-<timestamp>.zip)")
+    bundle_parser.add_argument("--since", type=_parse_duration, help="Only include trace lines newer than this, e.g. 2h, 3d")
+    bundle_parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    bundle_parser.add_argument("--agents-config", type=Path, default=DEFAULT_AGENTS_CONFIG)
+    bundle_parser.add_argument("--port", help="Serial port to probe for doctor's checks, for example /dev/cu.usbmodem2301")
+    bundle_parser.add_argument(
+        "--include-payloads", action="store_true",
+        help="Keep raw hook payloads if the trace was recorded in verbose mode (may contain prompt text)",
+    )
 
     return parser
 
