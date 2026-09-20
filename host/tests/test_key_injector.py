@@ -3,6 +3,24 @@ import time
 from switchboard.key_injector import FakeKeyInjector, RepeatingKeyInjector
 
 
+def wait_until(condition, *, timeout=3.0, interval=0.01):
+    """Polls `condition()` instead of sleeping a fixed duration then
+    checking once — a fixed sleep only barely longer than the expected
+    background-thread work (as this file's watchdog test used to do)
+    flakes under real scheduling jitter on a loaded CI runner even with
+    what looks like a generous margin locally. Returns as soon as
+    `condition()` is true; still fails the test (by returning False) if
+    it never becomes true within `timeout`, so a genuine regression in
+    the watchdog is still caught, just without racing the clock to do it.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(interval)
+    return condition()
+
+
 def make_injector(**overrides):
     posted: list[tuple[int, int, bool]] = []
     kwargs = dict(initial_delay=0.0, repeat_interval=0.01, max_hold=1.0, log=lambda msg: None)
@@ -47,8 +65,7 @@ def test_watchdog_auto_releases_after_max_hold():
     logged = []
     injector, posted = make_injector(max_hold=0.05, log=logged.append)
     injector.hold(1234, 49)
-    time.sleep(0.2)
-    assert posted[-1] == (1234, 49, False)
+    assert wait_until(lambda: posted[-1:] == [(1234, 49, False)])
     assert any("watchdog" in m for m in logged)
 
 

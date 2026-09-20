@@ -3,6 +3,7 @@ import zipfile
 from datetime import timedelta
 from pathlib import Path
 
+from switchboard import doctor as doctor_module
 from switchboard.hooks_install import HOOK_MARKER
 from switchboard.support_bundle import build_bundle
 
@@ -17,9 +18,25 @@ def _members(zip_path: Path) -> set[str]:
         return {n.split("switchboard-support/", 1)[1] for n in zf.namelist()}
 
 
+def _fake_doctor_checks(*, port, registry_path, agents_config_path):
+    return [doctor_module.DoctorCheck("Fake check", "ok", "stubbed — see test_doctor.py for real check coverage")]
+
+
+def stub_doctor(monkeypatch) -> None:
+    """doctor.run_checks() probes real OS state — osascript, launchctl,
+    Terminal automation permission — which is slow and environment-
+    dependent; unbounded once, it hung a CI runner for the length of the
+    whole job (see doctor.check_terminal_automation's fix). What these
+    tests care about is what build_bundle does with doctor's output
+    (renders doctor.txt/doctor.json), not doctor's checks themselves.
+    """
+    monkeypatch.setattr(doctor_module, "run_checks", _fake_doctor_checks)
+
+
 def _isolate_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    stub_doctor(monkeypatch)
 
 
 def test_build_bundle_succeeds_with_nothing_present(tmp_path, monkeypatch):
@@ -77,6 +94,7 @@ def test_build_bundle_succeeds_when_claude_and_codex_are_not_on_path(tmp_path, m
     monkeypatch.setattr(support_bundle.subprocess, "run", fake_run)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    stub_doctor(monkeypatch)
 
     out = build_bundle(
         out=tmp_path / "out.zip", registry_path=tmp_path / "r.json", agents_config_path=tmp_path / "a.json",

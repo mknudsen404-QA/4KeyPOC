@@ -158,8 +158,22 @@ def free_port() -> int:
 
 @pytest.fixture
 def ui_server(tmp_path, monkeypatch):
+    from switchboard import doctor as doctor_module
+
     monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / "Documents").mkdir(exist_ok=True)
+    # The support-bundle route (below) runs doctor.run_checks() for
+    # real by default, which probes actual OS state (osascript,
+    # launchctl, Terminal automation permission) — slow and
+    # environment-dependent, and unbounded once hung a CI runner for an
+    # entire job (see doctor.check_terminal_automation's fix). Stubbed
+    # for every test using this fixture, not just the support-bundle
+    # ones, since it's a real subprocess-touching side effect none of
+    # them are actually testing.
+    monkeypatch.setattr(
+        doctor_module, "run_checks",
+        lambda **kw: [doctor_module.DoctorCheck("Fake check", "ok", "stubbed for tests")],
+    )
     registry = Registry(tmp_path / "registry.json")
     ctx = UIContext(settings_path=tmp_path / "agents.json", registry=registry, token="test-token-123")
     port = free_port()
