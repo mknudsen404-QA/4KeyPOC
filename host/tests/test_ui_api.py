@@ -341,6 +341,43 @@ def test_post_hook_records_redacted_receipt_before_submit():
     assert "do the secret thing" not in json.dumps(receipts[0])
 
 
+# --- settings UI: "Download diagnostics" button ---------------------------
+
+
+def test_support_bundle_route_requires_token(ui_server):
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        _get(ui_server["port"], "/api/support-bundle")
+    assert excinfo.value.code == 403
+
+
+def test_support_bundle_route_returns_a_zip_with_the_right_token(ui_server):
+    req = Request(
+        f"http://127.0.0.1:{ui_server['port']}/api/support-bundle",
+        headers={"X-Switchboard-Token": ui_server["token"]},
+    )
+    resp = urllib.request.urlopen(req, timeout=5)
+    assert resp.status == 200
+    assert resp.headers["Content-Type"] == "application/zip"
+    assert "attachment" in resp.headers["Content-Disposition"]
+    assert "switchboard-support-" in resp.headers["Content-Disposition"]
+    body = resp.read()
+    assert body[:2] == b"PK"  # zip file magic
+
+
+def test_support_bundle_route_404s_without_ui_context():
+    port = free_port()
+    server = start_hook_server(lambda event: None, "127.0.0.1", port)
+    assert server is not None
+    time.sleep(0.2)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            _get(port, "/api/support-bundle", headers={"X-Switchboard-Token": "anything"})
+        assert excinfo.value.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_post_hook_verbose_trace_includes_full_payload():
     trace = _RecordingTrace(verbose=True)
     port = free_port()

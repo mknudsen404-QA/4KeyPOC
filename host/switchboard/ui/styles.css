@@ -389,6 +389,15 @@ button:disabled { opacity: 0.45; cursor: default; }
 .save-status.ok { color: var(--ok); }
 .save-status.err { color: var(--err); }
 
+/* ---- support card -------------------------------------------------------- */
+
+.support-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 8px;
+}
+
 /* ---- narrow screens ------------------------------------------------------ */
 
 @media (max-width: 460px) {

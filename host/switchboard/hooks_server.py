@@ -145,11 +145,35 @@ def _make_handler(
             if path in _STATIC_FILES:
                 filename, content_type = _STATIC_FILES[path]
                 return self._serve_static(filename, content_type)
+            if path == "/api/support-bundle":
+                return self._serve_support_bundle()
             route = _api_get_routes().get(path)
             if route is not None:
                 status, body = route(ui_context)
                 return self._send_json(status, body)
             self.send_error(404)
+
+        def _serve_support_bundle(self) -> None:
+            # Same token gate as PUT /api/settings — a page in another
+            # tab must not be able to pull the bundle just because it can
+            # reach this loopback port.
+            if (self.headers.get("X-Switchboard-Token") or "") != ui_context.token:
+                self.send_error(403, "Bad or missing X-Switchboard-Token")
+                return
+            from switchboard.ui import api
+
+            try:
+                status, body, filename = api.support_bundle_get(ui_context)
+            except OSError as exc:
+                return self._send_json(500, {"error": str(exc)})
+            if status != 200:
+                return self._send_json(status, {"error": body.decode("utf-8", errors="replace")})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def do_PUT(self):
             if not self._security_ok():

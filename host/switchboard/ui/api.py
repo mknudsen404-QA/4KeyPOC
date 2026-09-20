@@ -8,6 +8,10 @@ See docs/design/slot-settings-and-family-parity-plan.md Phase 3.1.
 
 from __future__ import annotations
 
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
 from switchboard.families import registry as family_registry
 from switchboard.registry import Registry
 from switchboard.settings import EFFORT_VALUES, VOICE_MODES, VOICE_PROVIDERS, SettingsValidationError, SlotSettingsService, validate_document
@@ -98,6 +102,23 @@ def status_get(registry: Registry) -> dict:
             "liveness": record.get("liveness"),
         })
     return {"slots": records}
+
+
+def support_bundle_get(ctx) -> tuple[int, bytes, str]:
+    """Builds a support bundle on demand for the settings page's
+    "Download diagnostics" button — same zip as `switchboard
+    support-bundle` on the CLI, built fresh into a temp file and read
+    back so hooks_server can stream it with the right headers.
+    `ctx` is a hooks_server.UIContext (settings_path doubles as the
+    agents.json path here; ctx.registry.path is the agent registry).
+    """
+    from switchboard.support_bundle import build_bundle
+
+    filename = f"switchboard-support-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = Path(tmp) / filename
+        build_bundle(out=out_path, registry_path=ctx.registry.path, agents_config_path=ctx.settings_path)
+        return 200, out_path.read_bytes(), filename
 
 
 def voice_providers_get() -> dict:

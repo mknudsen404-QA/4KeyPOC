@@ -323,6 +323,42 @@
     });
   }
 
+  function downloadSupportBundle() {
+    var button = $("#support-bundle-btn");
+    var status = $("#support-bundle-status");
+    button.disabled = true;
+    status.textContent = "Building…";
+    status.className = "save-status";
+
+    fetch("/api/support-bundle", { headers: { "X-Switchboard-Token": TOKEN } }).then(function (res) {
+      if (!res.ok) {
+        return res.json().catch(function () { return {}; }).then(function (body) {
+          throw new Error(body.error || ("HTTP " + res.status));
+        });
+      }
+      var disposition = res.headers.get("Content-Disposition") || "";
+      var match = /filename="([^"]+)"/.exec(disposition);
+      var filename = match ? match[1] : "switchboard-support.zip";
+      return res.blob().then(function (blob) { return { blob: blob, filename: filename }; });
+    }).then(function (result) {
+      var url = URL.createObjectURL(result.blob);
+      var link = document.createElement("a");
+      link.href = url;
+      link.download = result.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      status.textContent = "Saved " + result.filename;
+      status.className = "save-status ok";
+    }).catch(function (err) {
+      status.textContent = "Could not build diagnostics: " + err.message;
+      status.className = "save-status err";
+    }).finally(function () {
+      button.disabled = false;
+    });
+  }
+
   function loadAll() {
     return Promise.all([
       fetchJSON("/api/settings"),
@@ -348,6 +384,7 @@
   }
 
   $("#save-btn").addEventListener("click", save);
+  $("#support-bundle-btn").addEventListener("click", downloadSupportBundle);
   $("#led-idle-breathe").addEventListener("change", updateLedPreview);
   $("#led-thinking-cycle").addEventListener("change", updateLedPreview);
   loadAll();
