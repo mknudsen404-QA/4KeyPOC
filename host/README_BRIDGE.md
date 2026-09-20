@@ -384,6 +384,54 @@ array (`[{"name", "level", "detail"}, ...]`) instead of text lines, for
 scripting. `--port`, `--registry`, and `--agents-config` override what it
 probes, same as `listen`/`launch`.
 
+## Diagnostics
+
+Every `listen` run writes a second log alongside `bridge.out.log`:
+`~/Library/Logs/Switchboard/trace.jsonl` — one JSON object per line, one
+line per event the bridge processes (a hook, a board event, a liveness
+probe, a status transition, a 60-second heartbeat per slot). It's the
+input for questions `bridge.out.log` alone can't answer, like "how long
+was this slot stuck in `needs_input`" or "did the board free this slot
+because the CLI actually exited, or because a liveness probe glitched":
+
+```sh
+jq -c 'select(.kind=="transition")' ~/Library/Logs/Switchboard/trace.jsonl
+```
+
+It's redacted by default: hook payloads are reduced to a session hash,
+the notification type, the tool name, and the agent id — never prompt
+text, tool input/output, or file paths. That's what makes it safe to zip
+up and hand over without reading it first (see `support-bundle` below).
+Pass `--trace-verbose` (or set `SWITCHBOARD_TRACE_VERBOSE=1`, for the
+LaunchAgent case) to keep full hook payloads instead, for a session
+where you're actively reproducing something on your own machine.
+
+Both `trace.jsonl` and `bridge.out.log` are size-bounded (rotated at
+5&nbsp;MB) — `bridge.out.log`'s own noisiest lines (`No USB serial port
+found`, printed once per retry while the board is unplugged) are also
+collapsed to a first occurrence plus an occasional marker instead of one
+line per tick, which was 179,386 of 179,734 lines in a one-week capture
+before this existed.
+
+To hand a bug to someone else (or to us), zip everything up:
+
+```sh
+python3 host/switchboard_bridge.py support-bundle
+```
+
+Prints the path to a zip on your Desktop containing `trace.jsonl`, a tail
+of `bridge.out.log`/`bridge.err.log`, `doctor`'s checks, `agents.json`,
+the agent registry, version info, the LaunchAgent plist, and only the
+Switchboard-owned entries from your Claude/Codex hook config files (never
+the whole file). It works with no bridge running and no board connected
+— that's exactly when you're most likely to need it. `--since 2h` trims
+the trace to a recent window; `--out PATH` picks the destination;
+`--include-payloads` keeps verbose-mode payload fields if the trace was
+recorded with `--trace-verbose` (off by default, with a warning printed
+if anything was stripped). The same bundle is one click away from the
+settings page (`switchboard settings`) as "Download diagnostics", gated
+by the same per-run token as everything else on that page.
+
 ## Track status
 
 The bridge registry now stores status, effort, and activity per slot.
