@@ -146,10 +146,19 @@ def check_codex_hooks() -> DoctorCheck:
 
 
 def check_terminal_automation() -> DoctorCheck:
-    result = subprocess.run(
-        ["osascript", "-e", 'tell application "Terminal" to count windows'],
-        capture_output=True, text=True,
-    )
+    # `tell application "Terminal"` launches Terminal.app if it isn't
+    # already running — on a headless/CI machine (no Aqua session) that
+    # can hang indefinitely instead of failing fast, so this needs a
+    # timeout unlike the rest of doctor's subprocess calls (confirmed
+    # live: this call, unbounded, stalled a GitHub Actions macOS runner
+    # for the whole job).
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", 'tell application "Terminal" to count windows'],
+            capture_output=True, text=True, timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        return DoctorCheck("Terminal automation", "warn", "osascript timed out — no GUI session? (expected on CI)")
     if result.returncode == 0:
         return DoctorCheck("Terminal automation", "ok", f"{result.stdout.strip()} window(s)")
     if "-1743" in result.stderr:
