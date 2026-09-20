@@ -13,12 +13,14 @@ import json
 import os
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from switchboard.events import HookEvent
 from switchboard.registry import Registry
+from switchboard.trace import NullTraceWriter, redact_hook_payload
 
 HOOK_HOST = "127.0.0.1"
 HOOK_PORT = int(os.environ.get("SWITCHBOARD_HOOK_PORT", "8877"))
@@ -80,8 +82,9 @@ def _api_get_routes():
 
 
 def _make_handler(
-    submit: Callable[[HookEvent], None], ui_context: UIContext | None, port: int
+    submit: Callable[[HookEvent], None], ui_context: UIContext | None, port: int, trace=None
 ) -> type[http.server.BaseHTTPRequestHandler]:
+    trace = trace if trace is not None else NullTraceWriter()
     class _Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, format, *args):  # noqa: A002 - stdlib signature
             pass  # keep hook/UI traffic out of the bridge's normal event log
@@ -168,12 +171,22 @@ def _make_handler(
         def do_POST(self):
             if not self._security_ok():
                 return
+            rx_mono = time.monotonic()
             length = int(self.headers.get("Content-Length", 0) or 0)
             body = self.rfile.read(length) if length else b""
             event_name = self.path.rsplit("/", 1)[-1]
             slot_key = (self.headers.get("X-Switchboard-Slot") or "").strip()
             if slot_key:
-                submit(HookEvent(slot_key=slot_key, name=event_name, payload=_parse_body(body)))
+                payload = _parse_body(body)
+                # Recorded here, not just after Bridge.step processes it:
+                # the installed hook command is `curl --max-time 1 || true`
+                # (hooks_install.py), so a slow bridge silently drops the
+                # hook entirely — a hook_rx with no matching `hook` record
+                # shortly after is exactly that fingerprint.
+                receipt = {"kind": "hook_rx", "slot": slot_key, "event": event_name, "bytes": len(body)}
+                receipt.update(redact_hook_payload(payload) if not trace.verbose else payload)
+                trace.write(receipt)
+                submit(HookEvent(slot_key=slot_key, name=event_name, payload=payload, rx_mono=rx_mono))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -188,9 +201,10 @@ def start_hook_server(
     port: int = HOOK_PORT,
     *,
     ui_context: UIContext | None = None,
+    trace=None,
 ) -> http.server.ThreadingHTTPServer | None:
     try:
-        server = http.server.ThreadingHTTPServer((host, port), _make_handler(submit, ui_context, port))
+        server = http.server.ThreadingHTTPServer((host, port), _make_handler(submit, ui_context, port, trace))
     except OSError as exc:
         print(f"Could not start hook listener on {host}:{port}: {exc}", file=sys.stderr)
         return None

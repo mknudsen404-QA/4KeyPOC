@@ -289,3 +289,70 @@ def test_get_without_ui_context_404s_api_routes():
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --- diagnostic trace: hook receipt --------------------------------------
+
+
+class _RecordingTrace:
+    def __init__(self, verbose: bool = False) -> None:
+        self.verbose = verbose
+        self.records: list[dict] = []
+
+    def write(self, record: dict) -> None:
+        self.records.append(record)
+
+
+def _post_hook(port, event_name, slot, payload):
+    req = Request(
+        f"http://127.0.0.1:{port}/switchboard-hook/{event_name}",
+        data=json.dumps(payload).encode(),
+        headers={"X-Switchboard-Slot": slot, "Content-Type": "application/json"},
+        method="POST",
+    )
+    return urllib.request.urlopen(req, timeout=2)
+
+
+def test_post_hook_records_redacted_receipt_before_submit():
+    submitted = []
+    trace = _RecordingTrace()
+    port = free_port()
+    server = start_hook_server(submitted.append, "127.0.0.1", port, trace=trace)
+    assert server is not None
+    time.sleep(0.2)
+    try:
+        _post_hook(port, "PostToolUse", "2", {"session_id": "s-1", "tool_name": "shell", "prompt": "do the secret thing"})
+        time.sleep(0.1)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert len(submitted) == 1
+    assert submitted[0].slot_key == "2"
+    assert submitted[0].name == "PostToolUse"
+    assert submitted[0].rx_mono is not None
+    assert submitted[0].payload["prompt"] == "do the secret thing"  # the reducer still sees the raw payload
+
+    receipts = [r for r in trace.records if r["kind"] == "hook_rx"]
+    assert len(receipts) == 1
+    assert receipts[0]["slot"] == "2"
+    assert receipts[0]["event"] == "PostToolUse"
+    assert receipts[0]["tool"] == "shell"
+    assert "do the secret thing" not in json.dumps(receipts[0])
+
+
+def test_post_hook_verbose_trace_includes_full_payload():
+    trace = _RecordingTrace(verbose=True)
+    port = free_port()
+    server = start_hook_server(lambda event: None, "127.0.0.1", port, trace=trace)
+    assert server is not None
+    time.sleep(0.2)
+    try:
+        _post_hook(port, "PostToolUse", "2", {"session_id": "s-1", "prompt": "do the secret thing"})
+        time.sleep(0.1)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    receipts = [r for r in trace.records if r["kind"] == "hook_rx"]
+    assert receipts[0]["prompt"] == "do the secret thing"

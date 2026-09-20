@@ -27,6 +27,11 @@ class HookEvent:
     slot_key: str
     name: str  # "SessionStart", "PostToolUse", ...
     payload: dict  # parsed JSON body ({} if unparseable)
+    # time.monotonic() when hooks_server received the POST, before it was
+    # queued — lets the trace measure worker backlog (Bridge.step's
+    # `queue_ms`). None for anything that doesn't come through the HTTP
+    # server (tests constructing HookEvent directly, sample_events.jsonl).
+    rx_mono: float | None = None
 
 
 @dataclass(frozen=True)

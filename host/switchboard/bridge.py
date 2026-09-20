@@ -573,7 +573,7 @@ class Bridge:
                 ui_token_path.chmod(0o600)
             except OSError as exc:
                 self._log(f"Could not write UI token file {ui_token_path}: {exc}")
-        hook_server = start_hook_server(self.submit, hook_host, hook_port, ui_context=ui_context)
+        hook_server = start_hook_server(self.submit, hook_host, hook_port, ui_context=ui_context, trace=self.trace)
 
         started = self.clock.monotonic()
         try:

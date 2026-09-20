@@ -10,6 +10,7 @@ directly (`launch`, `launch-all`, `slots`, `status`, `clear`, `config`,
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -230,6 +231,7 @@ def settings_command(args: argparse.Namespace) -> int:
 
 def _make_bridge(args: argparse.Namespace, device):
     from switchboard.bridge import Bridge, _default_log
+    from switchboard.trace import open_default
 
     terminal = NullTerminal() if (args.no_open or args.dry_run) else _terminal
     if isinstance(terminal, NullTerminal):
@@ -239,6 +241,13 @@ def _make_bridge(args: argparse.Namespace, device):
         key_injector = RepeatingKeyInjector(
             terminal.post_key, initial_delay=initial_delay, repeat_interval=repeat_interval, log=_default_log
         )
+    # verbose (full hook payloads, incl. prompt text) only on --trace-verbose
+    # or SWITCHBOARD_TRACE_VERBOSE=1 — see docs/design/
+    # diagnostic-trace-and-support-bundle-spec.md section 7. Off by
+    # default so trace.jsonl is always safe to hand over without reading
+    # it first.
+    verbose = bool(getattr(args, "trace_verbose", False)) or os.environ.get("SWITCHBOARD_TRACE_VERBOSE") == "1"
+    trace = open_default(verbose=verbose, on_error=_default_log)
     return Bridge(
         registry=Registry(args.registry),
         device=device,
@@ -250,7 +259,7 @@ def _make_bridge(args: argparse.Namespace, device):
         # alone can leave diagnostic lines invisible on disk for
         # arbitrarily long. Bridge's own default logger already does this;
         # ProcessProber's is wired separately since it's constructed here.
-        prober=ProcessProber(log=_default_log),
+        prober=ProcessProber(log=_default_log, trace=trace),
         clock=SystemClock(),
         launch_config=load_agents_config(args.launch_config),
         settings_path=args.launch_config,
@@ -258,6 +267,7 @@ def _make_bridge(args: argparse.Namespace, device):
         dry_run=args.dry_run,
         no_open=args.no_open,
         close_dead_tabs=getattr(args, "close_dead_tabs", False),
+        trace=trace,
     )
 
 

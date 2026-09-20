@@ -4,6 +4,16 @@ from switchboard.liveness import ProcessProber
 from switchboard.model import Liveness
 
 
+class RecordingTraceWriter:
+    verbose = False
+
+    def __init__(self) -> None:
+        self.records: list[dict] = []
+
+    def write(self, record: dict) -> None:
+        self.records.append(record)
+
+
 def make_record(slot=1, tty="/dev/ttys001", **extra):
     record = {"slot": slot, "name": "Test", "family": "shell", "status": "idle", "terminal_tty": tty}
     record.update(extra)
@@ -89,3 +99,47 @@ def test_alive_and_dead_paths_never_log():
     dead = ProcessProber(run=lambda *a, **k: fake_result("-zsh\n"), exists=lambda p: True, log=logged.append)
     dead.probe(make_record())
     assert logged == []
+
+
+# --- trace evidence (docs/design/diagnostic-trace-and-support-bundle-spec.md) --
+
+
+def test_dead_traces_comm_list():
+    trace = RecordingTraceWriter()
+    prober = ProcessProber(run=lambda *a, **k: fake_result("login\n-zsh\n"), exists=lambda p: True, trace=trace)
+    assert prober.probe(make_record(slot=5)) is Liveness.DEAD
+    assert len(trace.records) == 1
+    assert trace.records[0] == {"kind": "probe", "slot": 5, "tty": "/dev/ttys001", "result": "dead", "comms": ["-zsh", "login"]}
+
+
+def test_dead_tty_missing_traces_reason():
+    trace = RecordingTraceWriter()
+    prober = ProcessProber(run=lambda *a, **k: fake_result(""), exists=lambda p: False, trace=trace)
+    assert prober.probe(make_record()) is Liveness.DEAD
+    assert trace.records[0]["result"] == "dead"
+    assert trace.records[0]["reason"] == "tty node gone"
+
+
+def test_unknown_on_timeout_traces_reason():
+    def raise_timeout(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="ps", timeout=2.0)
+
+    trace = RecordingTraceWriter()
+    prober = ProcessProber(run=raise_timeout, exists=lambda p: True, trace=trace)
+    assert prober.probe(make_record()) is Liveness.UNKNOWN
+    assert trace.records[0]["result"] == "unknown"
+    assert "timed out" in trace.records[0]["reason"]
+
+
+def test_unknown_no_tty_traces_reason():
+    trace = RecordingTraceWriter()
+    prober = ProcessProber(trace=trace)
+    assert prober.probe({"slot": 1}) is Liveness.UNKNOWN
+    assert trace.records[0] == {"kind": "probe", "slot": 1, "tty": None, "result": "unknown", "reason": "no terminal_tty"}
+
+
+def test_alive_never_traces():
+    trace = RecordingTraceWriter()
+    prober = ProcessProber(run=lambda *a, **k: fake_result("claude\n"), exists=lambda p: True, trace=trace)
+    assert prober.probe(make_record()) is Liveness.ALIVE
+    assert trace.records == []
