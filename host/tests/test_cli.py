@@ -21,7 +21,8 @@ def test_listen_help_lists_each_flag_once(capsys):
 
     options_text = help_text.split("options:", 1)[1]
     for flag in ("--registry", "--port", "--baud", "--duration", "--sample", "--stdin", "--auto-launch",
-                 "--launch-config", "--dry-run", "--no-open", "--close-dead-tabs", "--retry", "--retry-delay"):
+                 "--launch-config", "--dry-run", "--no-open", "--close-dead-tabs", "--retry", "--retry-delay",
+                 "--trace-verbose"):
         occurrences = len(re.findall(r"(?<![\w-])" + re.escape(flag) + r"(?![\w-])", options_text))
         assert occurrences == 1, f"{flag} appears {occurrences} times in `listen --help`'s options"
 
@@ -183,3 +184,108 @@ def test_launch_all_uses_defaults_cwd_and_effort(tmp_path, monkeypatch, registry
     assert len(seen_args) == 1
     assert seen_args[0].cwd == str(tmp_path / "Documents")
     assert seen_args[0].effort == "high"
+
+
+# --- diagnostics: noise suppression and log rotation ------------------------
+
+
+def test_repeater_prints_first_occurrence(capsys):
+    repeater = cli._Repeater(every=100)
+    repeater.print("waiting")
+    assert capsys.readouterr().out.strip() == "waiting"
+
+
+def test_repeater_collapses_identical_repeats(capsys):
+    repeater = cli._Repeater(every=10)
+    for _ in range(25):
+        repeater.print("waiting")
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line]
+    assert lines == ["waiting", "waiting (still happening, x10)", "waiting (still happening, x20)"]
+
+
+def test_repeater_summarizes_before_a_different_message(capsys):
+    repeater = cli._Repeater(every=100)
+    for _ in range(5):
+        repeater.print("waiting")
+    repeater.print("connected")
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line]
+    assert lines == ["waiting", "(previous message repeated 5 times)", "connected"]
+
+
+def test_repeater_no_summary_after_single_occurrence(capsys):
+    repeater = cli._Repeater(every=100)
+    repeater.print("waiting")
+    repeater.print("connected")
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line]
+    assert lines == ["waiting", "connected"]
+
+
+def test_rotate_bridge_out_log_leaves_small_file_alone(tmp_path, monkeypatch):
+    monkeypatch.setenv("SWITCHBOARD_LOG_DIR", str(tmp_path))
+    log_path = tmp_path / "bridge.out.log"
+    log_path.write_text("small")
+    cli._rotate_bridge_out_log(max_bytes=1000)
+    assert log_path.read_text() == "small"
+    assert not (tmp_path / "bridge.out.log.1").exists()
+
+
+def test_rotate_bridge_out_log_renames_when_over_budget(tmp_path, monkeypatch):
+    monkeypatch.setenv("SWITCHBOARD_LOG_DIR", str(tmp_path))
+    log_path = tmp_path / "bridge.out.log"
+    log_path.write_text("x" * 2000)
+    cli._rotate_bridge_out_log(max_bytes=1000)
+    assert not log_path.exists()
+    assert (tmp_path / "bridge.out.log.1").read_text() == "x" * 2000
+
+
+def test_rotate_bridge_out_log_overwrites_old_backup(tmp_path, monkeypatch):
+    monkeypatch.setenv("SWITCHBOARD_LOG_DIR", str(tmp_path))
+    (tmp_path / "bridge.out.log.1").write_text("stale")
+    log_path = tmp_path / "bridge.out.log"
+    log_path.write_text("x" * 2000)
+    cli._rotate_bridge_out_log(max_bytes=1000)
+    assert (tmp_path / "bridge.out.log.1").read_text() == "x" * 2000
+
+
+def test_rotate_bridge_out_log_missing_file_is_a_noop(tmp_path, monkeypatch):
+    monkeypatch.setenv("SWITCHBOARD_LOG_DIR", str(tmp_path))
+    cli._rotate_bridge_out_log()  # must not raise when nothing has ever been logged yet
+
+
+def test_listen_announces_a_stuck_bad_port_once_not_per_retry(tmp_path, monkeypatch, capsys):
+    """Regression: `--port` pointing at something that never opens used to
+    reprint "Listening on ..." on every retry-delay tick forever, same
+    spam shape as the "No USB serial port found" line this stage fixed."""
+    monkeypatch.setenv("SWITCHBOARD_LOG_DIR", str(tmp_path))
+
+    def raising_serial_device(port, baud):
+        raise OSError("no such device")
+
+    monkeypatch.setattr(cli, "SerialDevice", raising_serial_device)
+
+    sleeps = {"n": 0}
+
+    def fake_sleep(_seconds):
+        sleeps["n"] += 1
+        if sleeps["n"] >= 3:
+            raise StopIteration  # escape listen()'s infinite retry loop
+
+    monkeypatch.setattr(cli.time, "sleep", fake_sleep)
+
+    args = argparse.Namespace(
+        sample=False, stdin=False, port="/dev/nonexistent", retry=True, retry_delay=0.01, baud=115200,
+        trace_verbose=False,
+    )
+    try:
+        cli.listen(args)
+    except StopIteration:
+        pass
+
+    out = capsys.readouterr().out
+    assert out.count("Listening on /dev/nonexistent") == 1
+    # "Could not open" repeats identically every retry, so the repeater
+    # collapses it too (same shape as "No USB serial port found").
+    assert out.count("Could not open") == 1

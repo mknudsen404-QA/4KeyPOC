@@ -147,7 +147,11 @@ class NullTraceWriter:
         pass
 
 
-def _log_dir() -> Path:
+def log_dir() -> Path:
+    """~/Library/Logs/Switchboard, honoring SWITCHBOARD_LOG_DIR (tests,
+    and anyone running the bridge with a non-default log home). The one
+    place this directory is resolved — cli.py's bridge.out.log rotation
+    and support_bundle.py both call this rather than re-deriving it."""
     override = os.environ.get("SWITCHBOARD_LOG_DIR")
     if override:
         return Path(override)
@@ -155,6 +159,5 @@ def _log_dir() -> Path:
 
 
 def open_default(*, verbose: bool = False, on_error: Callable[[str], None] | None = None, clock=None) -> TraceWriter:
-    """~/Library/Logs/Switchboard/trace.jsonl, honoring SWITCHBOARD_LOG_DIR
-    (tests, and anyone running the bridge with a non-default log home)."""
-    return TraceWriter(_log_dir() / "trace.jsonl", verbose=verbose, on_error=on_error, clock=clock)
+    """~/Library/Logs/Switchboard/trace.jsonl (see log_dir())."""
+    return TraceWriter(log_dir() / "trace.jsonl", verbose=verbose, on_error=on_error, clock=clock)

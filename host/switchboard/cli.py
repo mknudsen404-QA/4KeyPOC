@@ -229,7 +229,14 @@ def settings_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _make_bridge(args: argparse.Namespace, device):
+def _trace_verbose_requested(args: argparse.Namespace) -> bool:
+    # See docs/design/diagnostic-trace-and-support-bundle-spec.md section
+    # 7: verbose (full hook payloads, incl. prompt text) is opt-in so
+    # trace.jsonl is always safe to hand over without reading it first.
+    return bool(getattr(args, "trace_verbose", False)) or os.environ.get("SWITCHBOARD_TRACE_VERBOSE") == "1"
+
+
+def _make_bridge(args: argparse.Namespace, device, *, trace=None):
     from switchboard.bridge import Bridge, _default_log
     from switchboard.trace import open_default
 
@@ -241,13 +248,8 @@ def _make_bridge(args: argparse.Namespace, device):
         key_injector = RepeatingKeyInjector(
             terminal.post_key, initial_delay=initial_delay, repeat_interval=repeat_interval, log=_default_log
         )
-    # verbose (full hook payloads, incl. prompt text) only on --trace-verbose
-    # or SWITCHBOARD_TRACE_VERBOSE=1 — see docs/design/
-    # diagnostic-trace-and-support-bundle-spec.md section 7. Off by
-    # default so trace.jsonl is always safe to hand over without reading
-    # it first.
-    verbose = bool(getattr(args, "trace_verbose", False)) or os.environ.get("SWITCHBOARD_TRACE_VERBOSE") == "1"
-    trace = open_default(verbose=verbose, on_error=_default_log)
+    if trace is None:
+        trace = open_default(verbose=_trace_verbose_requested(args), on_error=_default_log)
     return Bridge(
         registry=Registry(args.registry),
         device=device,
@@ -271,41 +273,84 @@ def _make_bridge(args: argparse.Namespace, device):
     )
 
 
+class _Repeater:
+    """Collapses a message that repeats every tick (e.g. "No USB serial
+    port found", printed once per --retry-delay while the board sits
+    unplugged for hours) down to the first occurrence, then a marker
+    every `every` repeats, instead of one line per tick forever — this
+    was 179,386 of 179,734 lines in a one-week bridge.out.log capture.
+    A different message breaking the run is prefixed with a one-line
+    summary of how many times the previous one repeated, so nothing is
+    silently lost, only de-duplicated.
+    """
+
+    def __init__(self, every: int = 100) -> None:
+        self._every = every
+        self._last: str | None = None
+        self._count = 0
+
+    def print(self, message: str) -> None:
+        if message == self._last:
+            self._count += 1
+            if self._count % self._every == 0:
+                print(f"{message} (still happening, x{self._count})", flush=True)
+            return
+        if self._last is not None and self._count > 1:
+            print(f"(previous message repeated {self._count} times)", flush=True)
+        print(message, flush=True)
+        self._last = message
+        self._count = 1
+
+
 def listen(args: argparse.Namespace) -> int:
+    from switchboard.bridge import _default_log
+    from switchboard.trace import open_default
+
+    trace = open_default(verbose=_trace_verbose_requested(args), on_error=_default_log)
+    _rotate_bridge_out_log()
+
     if args.sample:
         sample = HOST_DIR / "sample_events.jsonl"
         with sample.open("r", encoding="utf-8") as handle:
-            bridge = _make_bridge(args, FileDevice(handle))
+            bridge = _make_bridge(args, FileDevice(handle), trace=trace)
             bridge.startup_sync()
             return bridge.run(duration=args.duration)
 
     if args.stdin:
-        bridge = _make_bridge(args, FdDevice(sys.stdin.fileno(), write_fd=None))
+        bridge = _make_bridge(args, FdDevice(sys.stdin.fileno(), write_fd=None), trace=trace)
         bridge.startup_sync()
         return bridge.run(duration=args.duration)
 
+    repeater = _Repeater()
+    announced_port = None  # only re-announce "Listening on ..." when the port being tried changes
     while True:
         port = args.port or find_default_port()
         if not port:
             if not args.retry:
                 print("No USB serial port found. Plug in the board or pass --port.", file=sys.stderr)
                 return 2
-            print("No USB serial port found. Waiting for Switchboard...", flush=True)
+            repeater.print("No USB serial port found. Waiting for Switchboard...")
+            trace.write({"kind": "serial", "state": "searching"})
             time.sleep(args.retry_delay)
             continue
 
-        print(f"Listening on {port} at {args.baud} baud. Press Ctrl+C to stop.", flush=True)
+        if port != announced_port:
+            print(f"Listening on {port} at {args.baud} baud. Press Ctrl+C to stop.", flush=True)
+            announced_port = port
         try:
             device = SerialDevice(port, args.baud)
         except (OSError, RuntimeError) as exc:
             if not args.retry:
                 print(f"Could not open {port}: {exc}", file=sys.stderr)
                 return 2
-            print(f"Could not open {port}: {exc}. Retrying...", flush=True)
+            repeater.print(f"Could not open {port}: {exc}. Retrying...")
+            trace.write({"kind": "serial", "state": "searching", "port": port, "error": str(exc)})
             time.sleep(args.retry_delay)
             continue
 
-        bridge = _make_bridge(args, device)
+        announced_port = None  # a later reconnect to this same port announces again
+        trace.write({"kind": "serial", "state": "connected", "port": port})
+        bridge = _make_bridge(args, device, trace=trace)
         bridge.startup_sync()
         try:
             result = bridge.run(duration=args.duration)
@@ -313,6 +358,7 @@ def listen(args: argparse.Namespace) -> int:
                 return result
             if not args.retry:
                 raise bridge.last_shutdown_error
+            trace.write({"kind": "serial", "state": "lost", "port": port, "error": str(bridge.last_shutdown_error)})
             print(f"Serial connection lost: {bridge.last_shutdown_error}. Waiting for reconnect...", flush=True)
             time.sleep(args.retry_delay)
         except KeyboardInterrupt:
@@ -320,6 +366,30 @@ def listen(args: argparse.Namespace) -> int:
             return 0
         finally:
             device.close()
+
+
+def _rotate_bridge_out_log(max_bytes: int = 5_000_000) -> None:
+    """bridge.out.log is written by launchd's stdout redirection, not by
+    this process, so it can't be rotated with a RotatingFileHandler the
+    way trace.jsonl is — the bridge doesn't own that file descriptor.
+    Instead, at the start of each `listen`, if the file has grown past
+    max_bytes, rename it out of the way: launchd keeps writing to the
+    renamed inode for the rest of this run (imperfect, but requires no
+    sudo/newsyslog config), and the next bridge start gets a fresh file.
+    A no-op when SWITCHBOARD_LOG_DIR isn't set and $HOME/Library/Logs/
+    Switchboard/bridge.out.log doesn't exist or is small.
+    """
+    from switchboard.trace import log_dir
+
+    path = log_dir() / "bridge.out.log"
+    try:
+        if path.stat().st_size <= max_bytes:
+            return
+        rotated = path.with_name(path.name + ".1")
+        rotated.unlink(missing_ok=True)
+        path.rename(rotated)
+    except OSError:
+        pass  # best-effort: never block startup over log rotation
 
 
 def _add_listen_flags(parser: argparse.ArgumentParser) -> None:
@@ -344,6 +414,11 @@ def _add_listen_flags(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--retry", action="store_true", help="Keep waiting when the board is not connected yet")
     parser.add_argument("--retry-delay", type=float, default=2.0, help="Seconds between reconnect attempts")
+    parser.add_argument(
+        "--trace-verbose", action="store_true",
+        help="Include full hook payloads (prompt text, tool input/output) in trace.jsonl — off by default "
+        "so the trace is always safe to hand over without reading it first. Same as SWITCHBOARD_TRACE_VERBOSE=1.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
