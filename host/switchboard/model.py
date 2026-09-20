@@ -71,6 +71,7 @@ def slot_record(
         "terminal_title": terminal_title,
         "terminal_tty": terminal_tty,
         "status": "launched",
+        "status_since": now,
         "effort": normalize_effort(effort),
         "activity": "terminal launched",
         "last_launched_at": now,
@@ -90,6 +91,8 @@ def set_status(record: dict, status: str, now: int) -> None:
     becomes busy and is cleared the moment it stops being busy.
     """
     was_busy = record.get("status") in BUSY_STATUSES
+    if record.get("status") != status:
+        record["status_since"] = now
     record["status"] = status
     record["last_updated_at"] = now
     now_busy = status in BUSY_STATUSES

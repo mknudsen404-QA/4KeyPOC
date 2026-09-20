@@ -1,7 +1,7 @@
 from switchboard.bridge import Bridge
 from switchboard.clock import FakeClock
 from switchboard.device import FakeDevice
-from switchboard.events import BoardEvent, HookEvent
+from switchboard.events import BoardEvent, HookEvent, LivenessObserved
 from switchboard.key_injector import FakeKeyInjector
 from switchboard.liveness import FakeProber
 from switchboard.model import Liveness
@@ -9,9 +9,27 @@ from switchboard.registry import Registry
 from switchboard.terminal import FakeTerminal
 
 
+class RecordingTraceWriter:
+    """A TraceWriter double that keeps every record in memory instead of
+    writing to disk, so tests can assert on exactly what was traced."""
+
+    def __init__(self, verbose: bool = False) -> None:
+        self.verbose = verbose
+        self.records: list[dict] = []
+
+    def write(self, record: dict) -> None:
+        self.records.append(record)
+
+    def close(self) -> None:
+        pass
+
+    def of_kind(self, kind: str) -> list[dict]:
+        return [r for r in self.records if r.get("kind") == kind]
+
+
 def make_bridge(
     tmp_path, *, clock=None, auto_launch=True, dry_run=False, no_open=False, launch_config=None,
-    close_dead_tabs=False, settings_path=None,
+    close_dead_tabs=False, settings_path=None, trace=None,
 ):
     registry = Registry(tmp_path / "registry.json")
     device = FakeDevice()
@@ -32,6 +50,7 @@ def make_bridge(
         close_dead_tabs=close_dead_tabs,
         key_injector=key_injector,
         settings_path=settings_path,
+        trace=trace,
     )
     return bridge, registry, device, terminal, prober, clock, key_injector
 
@@ -403,3 +422,143 @@ def test_default_log_flushes(monkeypatch):
     monkeypatch.setattr("builtins.print", lambda *a, **k: calls.append(k.get("flush")))
     _default_log("hello")
     assert calls == [True]
+
+
+def test_default_log_prefixes_a_timestamp(capsys):
+    from switchboard.bridge import _default_log
+
+    _default_log("hello")
+    out = capsys.readouterr().out
+    assert out.endswith("hello\n")
+    ts = out.split(" ", 1)[0]
+    assert ts.endswith("Z")
+    assert ts.count("-") == 2 and ts.count(":") == 2
+
+
+def test_hook_event_traces_hook_then_transition_then_effect(tmp_path):
+    trace = RecordingTraceWriter()
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path, trace=trace)
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "status": "idle", "status_since": 0}}})
+
+    bridge.step(HookEvent("1", "UserPromptSubmit", {"session_id": "s-aaa", "tool_name": "shell"}))
+
+    kinds = [r["kind"] for r in trace.records]
+    assert kinds.index("hook") < kinds.index("transition") < kinds.index("effect")
+
+    hook_record = trace.of_kind("hook")[0]
+    assert hook_record["slot"] == "1"
+    assert hook_record["event"] == "UserPromptSubmit"
+    assert hook_record["family"] == "claude"
+    assert hook_record["applied"] is True
+    assert hook_record["tool"] == "shell"
+    assert "payload" not in hook_record  # default (non-verbose) trace never carries raw payload
+    assert len(hook_record["session"]) == 8
+
+    transition = trace.of_kind("transition")[0]
+    assert transition == {
+        **transition,
+        "slot": "1", "from": "idle", "to": "working", "family": "claude", "cause": "hook:UserPromptSubmit",
+    }
+    assert transition["dwell_ms"] is not None
+
+    assert trace.of_kind("effect")[0]["type"] == "SendUpdate"
+
+
+def test_hook_event_not_applied_when_session_owner_mismatch(tmp_path):
+    trace = RecordingTraceWriter()
+    bridge, registry, *_ = make_bridge(tmp_path, trace=trace)
+    registry.save(
+        {"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "status": "idle", "session_id": "s-owner"}}}
+    )
+
+    bridge.step(HookEvent("1", "UserPromptSubmit", {"session_id": "s-intruder"}))
+
+    hook_record = trace.of_kind("hook")[0]
+    assert hook_record["applied"] is False
+    assert trace.of_kind("transition") == []
+
+
+def test_verbose_trace_includes_raw_hook_payload(tmp_path):
+    trace = RecordingTraceWriter(verbose=True)
+    bridge, registry, *_ = make_bridge(tmp_path, trace=trace)
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "status": "idle"}}})
+
+    bridge.step(HookEvent("1", "UserPromptSubmit", {"session_id": "s-aaa", "prompt": "do the secret thing"}))
+
+    hook_record = trace.of_kind("hook")[0]
+    assert hook_record["payload"]["prompt"] == "do the secret thing"
+
+
+def test_noop_liveness_observed_traces_only_liveness(tmp_path):
+    trace = RecordingTraceWriter()
+    bridge, registry, *_ = make_bridge(tmp_path, trace=trace)
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "shell", "status": "idle"}}})
+
+    bridge.step(LivenessObserved({"1": Liveness.ALIVE}))
+
+    kinds = [r["kind"] for r in trace.records]
+    assert kinds == ["liveness"]
+
+
+def test_confirmed_dead_free_traces_freed_with_dwell(tmp_path):
+    clock = FakeClock(start=1_000_000.0)
+    trace = RecordingTraceWriter()
+    bridge, registry, *_ = make_bridge(tmp_path, clock=clock, trace=trace)
+    registry.save(
+        {"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "shell", "status": "idle", "status_since": 999_940}}}
+    )
+
+    clock.advance(60)
+    bridge.step(LivenessObserved({"1": Liveness.DEAD}))  # first DEAD: unconfirmed, no free yet
+    assert trace.of_kind("freed") == []
+
+    clock.advance(2)
+    bridge.step(LivenessObserved({"1": Liveness.DEAD}))  # second consecutive DEAD: confirmed, frees it
+
+    freed = trace.of_kind("freed")
+    assert len(freed) == 1
+    assert freed[0]["slot"] == "1"
+    assert freed[0]["from"] == "idle"
+    assert freed[0]["cause"] == "liveness"
+    assert freed[0]["dwell_ms"] == 122_000  # (1_000_062 - 999_940) * 1000
+
+
+def test_log_mirrors_into_trace_even_when_bridge_log_is_reassigned(tmp_path):
+    """Tests (and the LaunchAgent's own callers) reassign bridge.log
+    directly rather than passing log= to the constructor; mirroring into
+    the trace must survive that."""
+    trace = RecordingTraceWriter()
+    bridge, *_rest = make_bridge(tmp_path, trace=trace)
+    captured = []
+    bridge.log = captured.append
+    bridge._log("hello")
+    assert captured == ["hello"]
+    assert trace.of_kind("log")[0]["msg"] == "hello"
+
+
+def test_dry_run_launch_mirrors_into_trace(tmp_path):
+    trace = RecordingTraceWriter()
+    bridge, *_rest = make_bridge(tmp_path, dry_run=True, trace=trace)
+    bridge._apply_launch(1)
+    logs = trace.of_kind("log")
+    assert any("Would launch slot 1" in r["msg"] for r in logs)
+
+
+def test_heartbeat_fires_at_interval(tmp_path):
+    from switchboard.bridge import HEARTBEAT_INTERVAL_S
+
+    clock = FakeClock()
+    trace = RecordingTraceWriter()
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path, clock=clock, trace=trace)
+    registry.save(
+        {"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "status": "idle", "status_since": clock.t}}}
+    )
+
+    clock.advance(HEARTBEAT_INTERVAL_S)
+    bridge._emit_heartbeat(registry.load()["slots"])
+
+    heartbeats = trace.of_kind("heartbeat")
+    assert len(heartbeats) == 1
+    assert heartbeats[0]["slots"]["1"]["status"] == "idle"
+    assert heartbeats[0]["slots"]["1"]["dwell_ms"] == HEARTBEAT_INTERVAL_S * 1000
+    assert heartbeats[0]["pending_acks"] == 0

@@ -6,6 +6,8 @@ thread, the liveness ticker, the hook server) only ever calls `submit()`.
 from __future__ import annotations
 
 import copy
+import datetime
+import os
 import queue
 import secrets
 import threading
@@ -16,7 +18,7 @@ from typing import Callable
 
 from switchboard import model
 from switchboard.device import DeviceLink
-from switchboard.events import BoardEvent, Event, LivenessObserved, Shutdown, SlotRegistered, parse_board_line
+from switchboard.events import BoardEvent, Event, HookEvent, LivenessObserved, Shutdown, SlotRegistered, parse_board_line
 from switchboard.hooks_server import HOOK_HOST, HOOK_PORT, UIContext, start_hook_server
 from switchboard.key_injector import FakeKeyInjector, KeyInjector
 from switchboard.launcher import build_launch
@@ -24,6 +26,7 @@ from switchboard.liveness import ProcessProber
 from switchboard.reducer import CloseTab, Effect, Focus, Launch, Log, ReducerState, SendUpdate, VoiceKey, reduce
 from switchboard.registry import Registry
 from switchboard.terminal import TerminalDriver
+from switchboard.trace import NullTraceWriter, redact_hook_payload
 
 # How long to wait for Terminal to actually finish switching to a slot's tab
 # before starting a PTT hold — Focus(tty) can return before the switch has
@@ -38,6 +41,13 @@ FOCUS_SETTLE_POLL_INTERVAL_S = 0.03
 # freshness there matters more than avoiding the syscall.
 SETTINGS_RELOAD_INTERVAL_S = 5.0
 
+# How often the liveness ticker emits a `heartbeat` trace record (every
+# slot's current status and how long it's been there) — the input a dwell
+# based bug (a status stuck for far longer than it should be) needs to be
+# diagnosable at all, since without a periodic marker there is nothing to
+# compare a stuck slot's last transition against.
+HEARTBEAT_INTERVAL_S = 60.0
+
 
 def _default_log(message: str) -> None:
     # Plain `print` alone isn't enough here: when stdout is redirected to a
@@ -47,13 +57,42 @@ def _default_log(message: str) -> None:
     # they're printed. Confirmed live: a liveness-probe diagnostic line
     # never appeared on disk minutes after it must have run. flush=True
     # makes every log line land immediately regardless of buffering mode.
-    print(message, flush=True)
+    #
+    # The timestamp prefix is what makes "this happened N minutes after
+    # that" answerable from bridge.out.log alone — the file previously had
+    # none, so questions like "how long was this idle before it dropped"
+    # were unanswerable without cross-referencing something else.
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    print(f"{ts} {message}", flush=True)
 
 
 # BoardEvent names for which the Bridge probes liveness itself and injects
 # the result into the payload before handing the event to the (pure,
 # probe-free) reducer.
 _PROBED_EVENTS = ("agent.select", "voice.hold.start", "voice.hold.stop")
+
+
+def _slot_str(slot) -> str | None:
+    return None if slot is None else str(slot)
+
+
+def _tty_basename(tty: str | None) -> str | None:
+    return None if tty is None else tty.rsplit("/", 1)[-1]
+
+
+def _cause_of(event: Event) -> str:
+    """The trace's `cause` field for a transition/freed record: which
+    input caused this reduce() call, for correlating a status change back
+    to the event log line that explains it."""
+    if isinstance(event, BoardEvent):
+        return f"board:{event.name}"
+    if isinstance(event, HookEvent):
+        return f"hook:{event.name}"
+    if isinstance(event, LivenessObserved):
+        return "liveness"
+    if isinstance(event, SlotRegistered):
+        return "registered"
+    return "unknown"
 
 
 class Bridge:
@@ -73,6 +112,7 @@ class Bridge:
         key_injector: KeyInjector | None = None,
         log: Callable[[str], None] = _default_log,
         settings_path=None,
+        trace=None,
     ) -> None:
         self.registry = registry
         self.device = device
@@ -103,6 +143,10 @@ class Bridge:
         self.no_open = no_open
         self.close_dead_tabs = close_dead_tabs
         self.log = log
+        # NullTraceWriter() by default (not a required argument): every
+        # existing caller/test that doesn't pass trace= keeps behaving
+        # exactly as before — see switchboard/trace.py.
+        self.trace = trace if trace is not None else NullTraceWriter()
         self.state = ReducerState()
         self._queue: "queue.Queue[Event]" = queue.Queue()
         # Set by run() when the serial reader thread's device.lines() raises
@@ -121,23 +165,139 @@ class Bridge:
         """Thread-safe; callable from any thread."""
         self._queue.put(event)
 
+    def _log(self, message: str) -> None:
+        """The single place a plain text log line is produced, so it can
+        also reach trace.jsonl as a `log` record. Reassigning `self.log`
+        directly (tests do this to capture messages) still works: this
+        method calls `self.log(...)` by attribute lookup, so whatever is
+        currently assigned there still receives every message."""
+        self.log(message)
+        self.trace.write({"kind": "log", "msg": message})
+
     def step(self, event: Event) -> None:
         """Process ONE event on the calling thread. The only place that
         touches the registry inside this process."""
         event = self._resolve_probes(event)
+        self._trace_event_in(event)
         if isinstance(event, BoardEvent) and event.name == "agent.update.ack":
             slot = event.payload.get("slot")
             if slot is not None:
-                self.pending_acks.pop(str(slot), None)
+                pending = self.pending_acks.pop(str(slot), None)
+                if pending is not None:
+                    sent_at, _event_dict, _attempts = pending
+                    self.trace.write(
+                        {"kind": "ack", "slot": str(slot), "rtt_ms": round((self.clock.monotonic() - sent_at) * 1000, 1)}
+                    )
         with self.registry.transaction() as reg:
             slots = reg.setdefault("slots", {})
-            new_slots, effects = reduce(
-                slots, self.state, event, int(self.clock.now()), auto_launch=self.auto_launch
-            )
+            before = {
+                slot_key: (record.get("status"), record.get("status_since"), record.get("family"))
+                for slot_key, record in slots.items()
+            }
+            # Deep-copied now, before `reduce` can mutate it in place, so
+            # it can be diffed against the post-reduce snapshot below to
+            # tell whether this hook actually changed anything (a session-
+            # ownership guard or a non-blocking Notification type both
+            # legitimately no-op it — see reducer._apply_hook_event).
+            hook_before_record = copy.deepcopy(slots.get(event.slot_key)) if isinstance(event, HookEvent) else None
+            now = int(self.clock.now())
+            new_slots, effects = reduce(slots, self.state, event, now, auto_launch=self.auto_launch)
             reg["slots"] = new_slots
             snapshot = copy.deepcopy(new_slots)  # for effects, after the lock is released
+        if isinstance(event, SlotRegistered):
+            slot_key = str(event.record["slot"])
+            self.trace.write(
+                {
+                    "kind": "registered",
+                    "slot": slot_key,
+                    "family": event.record.get("family"),
+                    "tty": _tty_basename(event.record.get("terminal_tty")),
+                }
+            )
+        if isinstance(event, HookEvent):
+            after_record = snapshot.get(event.slot_key)
+            record = redact_hook_payload(event.payload) if self.trace.verbose is False else dict(event.payload)
+            record.update(
+                {
+                    "kind": "hook",
+                    "slot": event.slot_key,
+                    "event": event.name,
+                    "family": (after_record or hook_before_record or {}).get("family"),
+                    "applied": after_record != hook_before_record,
+                }
+            )
+            if self.trace.verbose:
+                record["payload"] = event.payload
+            rx_mono = getattr(event, "rx_mono", None)
+            if rx_mono is not None:
+                record["queue_ms"] = round((self.clock.monotonic() - rx_mono) * 1000, 1)
+            self.trace.write(record)
+        self._trace_transitions(before, snapshot, cause=_cause_of(event), now=now)
         for effect in effects:
             self._apply(effect, snapshot)
+
+    def _trace_event_in(self, event: Event) -> None:
+        """Emit the trace record for an event arriving at step(), before
+        it's reduced — everything here is known from the event alone."""
+        if isinstance(event, BoardEvent):
+            record = {"kind": "board", "event": event.name, "slot": _slot_str(event.payload.get("slot"))}
+            if "liveness" in event.payload:
+                record["liveness"] = event.payload["liveness"]
+            self.trace.write(record)
+        elif isinstance(event, LivenessObserved):
+            self.trace.write(
+                {
+                    "kind": "liveness",
+                    "results": {k: v.value for k, v in event.results.items()},
+                    "confirm": event.confirm,
+                }
+            )
+        # HookEvent and SlotRegistered are traced after reduce (§4.2: they
+        # need post-reduce info — `applied`/`family` for a hook, the final
+        # record for a registration) rather than here.
+
+    def _trace_transitions(self, before: dict, snapshot: dict, *, cause: str, now: int) -> None:
+        """Diff every slot's status before/after one reduce() call and
+        emit one `transition` (or `freed`, for a slot that no longer
+        exists) record per slot whose status actually changed. Silent
+        when nothing changed — most LivenessObserved steps are no-ops and
+        must stay free."""
+
+        def dwell_ms(status_since) -> int | None:
+            if status_since is None:
+                return None
+            return max(0, (now - int(status_since)) * 1000)
+
+        for slot_key, (from_status, status_since, family) in before.items():
+            if slot_key not in snapshot:
+                self.trace.write(
+                    {
+                        "kind": "freed",
+                        "slot": slot_key,
+                        "from": from_status,
+                        "family": family,
+                        "cause": cause,
+                        "dwell_ms": dwell_ms(status_since),
+                    }
+                )
+        for slot_key, record in snapshot.items():
+            prior = before.get(slot_key)
+            if prior is None:
+                continue  # newly registered slot: covered by the `registered` record
+            from_status, status_since, _family = prior
+            to_status = record.get("status")
+            if to_status != from_status:
+                self.trace.write(
+                    {
+                        "kind": "transition",
+                        "slot": slot_key,
+                        "from": from_status,
+                        "to": to_status,
+                        "family": record.get("family"),
+                        "cause": cause,
+                        "dwell_ms": dwell_ms(status_since),
+                    }
+                )
 
     def _resolve_probes(self, event: Event) -> Event:
         if not isinstance(event, BoardEvent) or event.name not in _PROBED_EVENTS:
@@ -194,17 +354,22 @@ class Bridge:
             event_dict = model.agent_update_event(record, self.clock.now(), liveness=effect.liveness)
             self.device.send(event_dict)
             self.pending_acks[effect.slot_key] = (self.clock.monotonic(), event_dict, 1)
+            self.trace.write({"kind": "effect", "type": "SendUpdate", "slot": effect.slot_key})
         elif isinstance(effect, Launch):
+            self.trace.write({"kind": "effect", "type": "Launch", "slot": str(effect.slot)})
             self._apply_launch(effect.slot)
         elif isinstance(effect, Focus):
+            self.trace.write({"kind": "effect", "type": "Focus"})
             self.terminal.focus(effect.tty)
         elif isinstance(effect, VoiceKey):
+            self.trace.write({"kind": "effect", "type": "VoiceKey"})
             self._apply_voice_key(effect)
         elif isinstance(effect, CloseTab):
+            self.trace.write({"kind": "effect", "type": "CloseTab"})
             if self.close_dead_tabs:
                 self.terminal.close(effect.tty)
         elif isinstance(effect, Log):
-            self.log(effect.message)
+            self._log(effect.message)
 
     def _apply_voice_key(self, effect: VoiceKey) -> None:
         from switchboard.voice import registry as voice_registry
@@ -212,12 +377,12 @@ class Bridge:
 
         provider = voice_registry.get(effect.provider)
         pid = self.terminal.terminal_pid()
-        ctx = VoiceContext(pid=pid, key_injector=self.key_injector, chord=effect.chord, mode=effect.mode, log=self.log)
+        ctx = VoiceContext(pid=pid, key_injector=self.key_injector, chord=effect.chord, mode=effect.mode, log=self._log)
         if not effect.down:
             provider.release(ctx)
             return
         if effect.tty is not None and not self._wait_for_focus_settled(effect.tty):
-            self.log(f"voice hold aborted: focus did not settle on {effect.tty} within {FOCUS_SETTLE_TIMEOUT_S}s")
+            self._log(f"voice hold aborted: focus did not settle on {effect.tty} within {FOCUS_SETTLE_TIMEOUT_S}s")
             return
         provider.hold(ctx)
 
@@ -259,7 +424,8 @@ class Bridge:
         doc = SlotSettingsService(self.settings_path).load()
         self.launch_config = to_launch_config(doc)
         self._send_led_config(doc)
-        self.log("settings reloaded")
+        self._log("settings reloaded")
+        self.trace.write({"kind": "settings"})
 
     def _send_led_config(self, doc: dict) -> None:
         """Send the board-wide LED pulse config (idle-breathe period, busy
@@ -289,7 +455,7 @@ class Bridge:
         self._maybe_reload_settings(force_check=True)
         plan = build_launch(slot, self.launch_config)
         if self.dry_run:
-            self.log(f"Would launch slot {slot}: {plan.shell_command}")
+            self._log(f"Would launch slot {slot}: {plan.shell_command}")
             return
         tty = None if self.no_open else self.terminal.open(plan.shell_command)
         record = model.slot_record(**plan.record_fields, terminal_tty=tty, now=int(self.clock.now()))
@@ -305,11 +471,35 @@ class Bridge:
             if now - sent_at < 1.0:
                 continue
             if attempts >= 3:
-                self.log(f"slot {slot_key}: board did not ack after 3 attempts")
+                self._log(f"slot {slot_key}: board did not ack after 3 attempts")
+                self.trace.write({"kind": "ack_giveup", "slot": slot_key})
                 self.pending_acks.pop(slot_key, None)
                 continue
             self.device.send(event_dict)
             self.pending_acks[slot_key] = (now, event_dict, attempts + 1)
+
+    def _emit_heartbeat(self, slots: dict[str, dict]) -> None:
+        """Every slot's current status and how long it's been there — the
+        only way a stuck status (bugs like "needs_input lingers for most
+        of a turn" or "slot silently frees after 15 idle minutes") is
+        measurable after the fact, since without a periodic marker there
+        is nothing to compare a slot's last transition against.
+        """
+        now = int(self.clock.now())
+        slot_info = {}
+        for slot_key, record in slots.items():
+            status_since = record.get("status_since")
+            dwell_ms = None if status_since is None else max(0, (now - int(status_since)) * 1000)
+            slot_info[slot_key] = {"status": record.get("status"), "dwell_ms": dwell_ms, "family": record.get("family")}
+        self.trace.write(
+            {
+                "kind": "heartbeat",
+                "port": getattr(self.device, "port", None),
+                "slots": slot_info,
+                "pending_acks": len(self.pending_acks),
+                "queue_depth": self._queue.qsize(),
+            }
+        )
 
     def run(
         self,
@@ -320,6 +510,14 @@ class Bridge:
         hook_port: int = HOOK_PORT,
     ) -> int:
         stop = threading.Event()
+        self.trace.write(
+            {
+                "kind": "start",
+                "port": getattr(self.device, "port", None),
+                "pid": os.getpid(),
+                "verbose": self.trace.verbose,
+            }
+        )
 
         def read_serial() -> None:
             try:
@@ -328,14 +526,15 @@ class Bridge:
                     if parsed is None:
                         continue
                     if isinstance(parsed, str):
-                        self.log(parsed)
+                        self._log(parsed)
                         continue
                     self.submit(parsed)
-                self.log("reader thread: device.lines() ended without an exception")
+                self._log("reader thread: device.lines() ended without an exception")
             except OSError as exc:
                 self.submit(Shutdown(error=exc))
 
         def tick_liveness() -> None:
+            last_heartbeat = self.clock.monotonic()
             while not stop.wait(liveness_interval):
                 try:
                     self._maybe_reload_settings()
@@ -345,8 +544,13 @@ class Bridge:
                     if results:
                         self.submit(LivenessObserved(results))
                     self.retry_pending_acks()
-                except Exception:  # noqa: BLE001 - must survive to probe again next tick
+                    now_mono = self.clock.monotonic()
+                    if now_mono - last_heartbeat >= HEARTBEAT_INTERVAL_S:
+                        last_heartbeat = now_mono
+                        self._emit_heartbeat(slots)
+                except Exception as exc:  # noqa: BLE001 - must survive to probe again next tick
                     traceback.print_exc()
+                    self.trace.write({"kind": "error", "where": "tick_liveness", "type": type(exc).__name__, "msg": str(exc)})
 
         reader_thread = threading.Thread(target=read_serial, daemon=True)
         reader_thread.start()
@@ -368,7 +572,7 @@ class Bridge:
                 ui_token_path.write_text(token)
                 ui_token_path.chmod(0o600)
             except OSError as exc:
-                self.log(f"Could not write UI token file {ui_token_path}: {exc}")
+                self._log(f"Could not write UI token file {ui_token_path}: {exc}")
         hook_server = start_hook_server(self.submit, hook_host, hook_port, ui_context=ui_context)
 
         started = self.clock.monotonic()
@@ -382,12 +586,13 @@ class Bridge:
                     continue
                 if isinstance(event, Shutdown):
                     self.last_shutdown_error = event.error
-                    self.log(f"worker: got Shutdown(error={event.error!r}), stopping run()")
+                    self._log(f"worker: got Shutdown(error={event.error!r}), stopping run()")
                     return 0
                 try:
                     self.step(event)
-                except Exception:  # noqa: BLE001 - the worker must be as unkillable as the ticker
+                except Exception as exc:  # noqa: BLE001 - the worker must be as unkillable as the ticker
                     traceback.print_exc()
+                    self.trace.write({"kind": "error", "where": "worker", "type": type(exc).__name__, "msg": str(exc)})
         finally:
             stop.set()
             if ui_token_path is not None:
