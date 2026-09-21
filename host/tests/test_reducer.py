@@ -206,6 +206,41 @@ def test_foreign_session_ignored_golden_scenario():
     assert slots["1"]["status"] == "working"
 
 
+def test_first_hook_claims_ownership_for_a_family_with_no_session_start():
+    """Codex never sends a SessionStart hook at all (see
+    families/codex.py's docstring), so its slots start with no
+    session_id — ownership has to be claimable from whichever hook shows
+    up first, not specifically SessionStart, or a Codex slot is
+    permanently unclaimed and any session_id can act on it."""
+    slots = {"1": make_record(family="codex", status="launched")}
+    slots, _ = do_hook(slots, "UserPromptSubmit", hook_body(session_id="s-real"))
+    assert slots["1"]["session_id"] == "s-real"
+    assert slots["1"]["status"] == "working"
+
+
+def test_second_session_end_does_not_free_an_owned_codex_slot():
+    """Regression, confirmed live via a support-bundle trace: two Codex
+    CLI processes both tagged the same SWITCHBOARD_SLOT (a second
+    terminal inheriting the env var, e.g.). The second session's
+    SessionEnd used to free the slot unconditionally — because Codex
+    slots never got an owner in the first place (nothing but
+    SessionStart could claim one, and Codex never sends it) — silently
+    dropping tracking of the first session while it was still working.
+    """
+    slots = {"1": make_record(family="codex", status="working", session_id="s-real")}
+    slots, effects = do_hook(slots, "SessionEnd", hook_body(session_id="s-other"))
+    assert effects == []
+    assert slots["1"]["status"] == "working"
+    assert slots["1"]["session_id"] == "s-real"
+
+
+def test_the_real_session_end_still_frees_the_codex_slot():
+    slots = {"1": make_record(family="codex", status="working", session_id="s-real")}
+    slots, effects = do_hook(slots, "SessionEnd", hook_body(session_id="s-real"))
+    assert "1" not in slots
+    assert effects == [SendUpdate("1")]
+
+
 # ---- New: liveness-freeing rules (ported from Phase 0's test_liveness.py) --
 
 

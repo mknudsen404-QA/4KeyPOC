@@ -100,6 +100,34 @@ def test_step_hook_sequence_matches_phase0_golden(tmp_path):
     assert "1" not in registry.load()["slots"]
 
 
+def test_stray_codex_session_end_does_not_free_the_working_slot(tmp_path):
+    """Regression for a bug confirmed live via a support-bundle trace: a
+    Codex slot picked up session A's UserPromptSubmit (Codex never sends
+    SessionStart, so that first hook is what claims the slot), then
+    session B — an unrelated Codex process also tagged the same
+    SWITCHBOARD_SLOT — sent SessionEnd. That used to free the slot out
+    from under session A while it was still actively working.
+    """
+    trace = RecordingTraceWriter()
+    bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path, trace=trace)
+    registry.save({"version": 1, "slots": {"2": {"slot": 2, "name": "A", "family": "codex", "status": "launched"}}})
+
+    bridge.step(HookEvent("2", "UserPromptSubmit", {"session_id": "session-a"}))
+    assert registry.load()["slots"]["2"]["status"] == "working"
+    assert registry.load()["slots"]["2"]["session_id"] == "session-a"
+
+    bridge.step(HookEvent("2", "SessionEnd", {"session_id": "session-b"}))
+    assert "2" in registry.load()["slots"]
+    assert registry.load()["slots"]["2"]["status"] == "working"
+    assert trace.of_kind("freed") == []
+
+    bridge.step(HookEvent("2", "SessionEnd", {"session_id": "session-a"}))
+    assert "2" not in registry.load()["slots"]
+    freed = trace.of_kind("freed")
+    assert len(freed) == 1
+    assert freed[0]["cause"] == "hook:SessionEnd"
+
+
 def test_effects_run_after_lock_released(tmp_path):
     bridge, registry, device, terminal, prober, clock, _key_injector = make_bridge(tmp_path)
     registry.save({"version": 1, "slots": {}})

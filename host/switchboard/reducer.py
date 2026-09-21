@@ -343,15 +343,24 @@ def _apply_hook_event(slots: dict[str, dict], slot_key: str, record: dict, event
     the full event table.
     """
     # Guard against a second session (e.g. a relaunch that reused
-    # SWITCHBOARD_SLOT before the old one's SessionEnd freed it) sending
-    # hooks that would otherwise corrupt this slot's state. The slot's
-    # owner is whichever session_id first claims it via SessionStart;
-    # hooks from any other session_id are dropped rather than applied.
+    # SWITCHBOARD_SLOT before the old one's SessionEnd freed it, or an
+    # unrelated CLI process that happens to inherit the same
+    # SWITCHBOARD_SLOT env var) sending hooks that would otherwise
+    # corrupt this slot's state. The slot's owner is whichever session_id
+    # is carried by the first hook this slot record sees — not
+    # specifically SessionStart: Codex never sends a SessionStart hook at
+    # all (see families/codex.py), so restricting the claim to that event
+    # left every Codex slot permanently unclaimed, meaning ANY session_id
+    # could freely send hooks for it — including a SessionEnd from a
+    # completely unrelated Codex process, silently freeing a slot whose
+    # real session was still actively working (confirmed live via a
+    # support-bundle trace: two Codex sessions both tagged slot 2, the
+    # second one's SessionEnd killed tracking of the first, 44s into
+    # "working"). Once a slot has an owner, hooks from any other
+    # session_id are dropped rather than applied, same as before.
     incoming = payload.get("session_id")
     owner = record.get("session_id")
-    if event == "SessionStart" and incoming:
-        if owner and owner != incoming:
-            return False  # a second session claims an owned slot: ignore it
+    if incoming and not owner:
         record["session_id"] = incoming
     elif incoming and owner and incoming != owner:
         return False  # stale/foreign session: ignore
