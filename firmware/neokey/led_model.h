@@ -100,13 +100,21 @@ inline unsigned long pulsePeriodFor(Status s, uint32_t elapsedMs, uint32_t rampM
   return staticPulseMsFor(s);
 }
 
-// Smooth raised-cosine breathing wave (0..1..0), floored at 0.35 so the pulse
-// dims rather than blacks out completely.
-inline float breathFactor(unsigned long nowMs, unsigned long periodMs) {
+// Default dim floor for the breathing wave — needs_input's blink and the
+// busy ramp's pulse both stay at this floor (dims rather than blacks out
+// completely). Idle's own breathing gets a much lower floor (see
+// IDLE_BREATH_FLOOR, applied in renderKey) since a "giant breath" reads
+// better close to fully off at its lowest point.
+constexpr float DEFAULT_BREATH_FLOOR = 0.35f;
+constexpr float IDLE_BREATH_FLOOR = 0.06f;
+
+// Smooth raised-cosine breathing wave (0..1..0), floored at `floor` so the
+// pulse dims rather than (necessarily) blacking out completely.
+inline float breathFactor(unsigned long nowMs, unsigned long periodMs, float floor = DEFAULT_BREATH_FLOOR) {
   if (periodMs == 0) return 1.0f;
   float phase = (float)(nowMs % periodMs) / (float)periodMs;
   float wave = 0.5f - 0.5f * cosf(phase * 2.0f * (float)PI);
-  return 0.35f + 0.65f * wave;
+  return floor + (1.0f - floor) * wave;
 }
 
 inline uint32_t scaleColor(uint32_t color, float factor) {
@@ -159,7 +167,8 @@ inline uint32_t renderKey(Status s, uint32_t elapsedMs, bool selected, unsigned 
   uint32_t color = applySelectionFloor(base, selected);
   unsigned long period = pulsePeriodFor(s, elapsedMs, rampMs, idleOverrideMs);
   if (period != 0) {
-    color = scaleColor(color, breathFactor(nowMs, period));
+    float floor = (s == Status::Idle) ? IDLE_BREATH_FLOOR : DEFAULT_BREATH_FLOOR;
+    color = scaleColor(color, breathFactor(nowMs, period, floor));
   }
   return color;
 }

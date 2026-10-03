@@ -20,6 +20,7 @@ host/agent_registry.json
 host/agent_registry.json.lock
 host/agent_registry.json.ui_token
 host/agents.json
+host/agents.json.bak
 
 .DS_Store
 

@@ -90,12 +90,23 @@ static void test_idle_is_solid_without_an_override() {
 
 static void test_idle_breathes_with_an_override() {
   assert(pulsePeriodFor(Status::Idle, 0, BUSY_RAMP_MS, 7000UL) == 7000UL);
-  // breathFactor's raised-cosine wave starts at its dim floor (0.35) at
-  // phase 0 and peaks (1.0) at phase 0.5 — so nowMs=0 should be visibly
-  // dimmer than nowMs=half the period.
+  // breathFactor's raised-cosine wave starts at its dim floor at phase 0
+  // and peaks (1.0) at phase 0.5 — so nowMs=0 should be visibly dimmer
+  // than nowMs=half the period.
   uint32_t atTrough = renderKey(Status::Idle, 0, /*selected=*/true, /*nowMs=*/0, false, BUSY_RAMP_MS, 7000UL);
   uint32_t atPeak = renderKey(Status::Idle, 0, /*selected=*/true, /*nowMs=*/3500, false, BUSY_RAMP_MS, 7000UL);
   assert((atTrough & 0xFF) < (atPeak & 0xFF));
+}
+
+static void test_idle_breath_floor_is_much_dimmer_than_default() {
+  // Idle's own floor (IDLE_BREATH_FLOOR) is much lower than the shared
+  // default (DEFAULT_BREATH_FLOOR) other pulsing statuses use — a "giant
+  // breath" should read as nearly off at its dimmest, unlike
+  // needs_input's blink or the busy pulse.
+  assert(IDLE_BREATH_FLOOR < DEFAULT_BREATH_FLOOR);
+  uint32_t idleTrough = renderKey(Status::Idle, 0, /*selected=*/true, /*nowMs=*/0, false, BUSY_RAMP_MS, 7000UL);
+  uint32_t neverIdle = scaleColor(colorForStatus(Status::Idle), DEFAULT_BREATH_FLOOR);
+  assert((idleTrough & 0xFF) < (neverIdle & 0xFF));
 }
 
 static void test_idle_override_does_not_affect_other_statuses() {
@@ -136,6 +147,7 @@ int main() {
   test_uncertain_pulses_regardless_of_selection();
   test_idle_is_solid_without_an_override();
   test_idle_breathes_with_an_override();
+  test_idle_breath_floor_is_much_dimmer_than_default();
   test_idle_override_does_not_affect_other_statuses();
   test_busy_ramp_ms_override_speeds_up_the_whole_ramp();
   test_busy_pulse_period_scales_with_ramp_override();
