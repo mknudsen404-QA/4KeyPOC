@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from switchboard.families.antigravity import AntigravityProfile
 from switchboard.families.base import Capabilities, Detection, FamilyProfile, HookSpec, VoiceSpec
 from switchboard.families.claude import ClaudeProfile
 from switchboard.families.codex import CodexProfile
@@ -63,7 +64,7 @@ class FamilyRegistry:
         return {name: list(profile.known_paths) for name, profile in self._by_name.items() if profile.known_paths}
 
 
-registry = FamilyRegistry((ClaudeProfile(), CodexProfile()))
+registry = FamilyRegistry((ClaudeProfile(), CodexProfile(), AntigravityProfile()))
 
 __all__ = [
     "registry",

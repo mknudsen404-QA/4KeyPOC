@@ -171,7 +171,7 @@ def check_terminal_automation() -> DoctorCheck:
 
 def check_accessibility() -> DoctorCheck:
     try:
-        from Quartz import AXIsProcessTrusted  # type: ignore[import]
+        from ApplicationServices import AXIsProcessTrusted  # type: ignore[import]
     except ImportError:
         return DoctorCheck("Accessibility", "warn", "pyobjc missing, voice PTT unavailable")
     if AXIsProcessTrusted():

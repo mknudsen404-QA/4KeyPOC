@@ -110,6 +110,7 @@ class Bridge:
         no_open: bool,
         close_dead_tabs: bool = False,
         key_injector: KeyInjector | None = None,
+        global_key_injector: KeyInjector | None = None,
         log: Callable[[str], None] = _default_log,
         settings_path=None,
         trace=None,
@@ -119,6 +120,7 @@ class Bridge:
         self.terminal = terminal
         self.prober = prober
         self.key_injector = key_injector or FakeKeyInjector()
+        self.global_key_injector = global_key_injector or FakeKeyInjector()
         self.clock = clock
         self.launch_config = launch_config
         # settings_path is optional (Phase 2.4): when given, launch_config
@@ -377,7 +379,14 @@ class Bridge:
 
         provider = voice_registry.get(effect.provider)
         pid = self.terminal.terminal_pid()
-        ctx = VoiceContext(pid=pid, key_injector=self.key_injector, chord=effect.chord, mode=effect.mode, log=self._log)
+        ctx = VoiceContext(
+            pid=pid,
+            key_injector=self.key_injector,
+            global_key_injector=self.global_key_injector,
+            chord=effect.chord,
+            mode=effect.mode,
+            log=self._log,
+        )
         if not effect.down:
             provider.release(ctx)
             return

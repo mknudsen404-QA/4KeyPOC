@@ -9,7 +9,17 @@ from switchboard.voice.none import NoneProvider
 
 def ctx(chord=None, mode="hold", pid=1234):
     logs = []
-    return VoiceContext(pid=pid, key_injector=FakeKeyInjector(), chord=chord, mode=mode, log=logs.append), logs
+    return (
+        VoiceContext(
+            pid=pid,
+            key_injector=FakeKeyInjector(),
+            global_key_injector=FakeKeyInjector(),
+            chord=chord,
+            mode=mode,
+            log=logs.append,
+        ),
+        logs,
+    )
 
 
 # --- registry ----------------------------------------------------------------
@@ -108,10 +118,10 @@ def test_hotkey_hold_mode_holds_the_configured_chord():
     provider = HotkeyProvider()
     c, _ = ctx(chord="space", mode="hold")
     provider.hold(c)
-    assert c.key_injector.held == [(1234, 49)]
-    assert c.key_injector.released == []
+    assert c.global_key_injector.held == [(1234, 49)]
+    assert c.global_key_injector.released == []
     provider.release(c)
-    assert c.key_injector.released == [(1234, 49)]
+    assert c.global_key_injector.released == [(1234, 49)]
 
 
 def test_hotkey_toggle_mode_taps_twice_not_holds():
@@ -120,21 +130,21 @@ def test_hotkey_toggle_mode_taps_twice_not_holds():
     provider = HotkeyProvider()
     c, _ = ctx(chord="space", mode="toggle")
     provider.hold(c)
-    assert c.key_injector.held == [(1234, 49)]
-    assert c.key_injector.released == [(1234, 49)]  # tapped, not held
+    assert c.global_key_injector.held == [(1234, 49)]
+    assert c.global_key_injector.released == [(1234, 49)]  # tapped, not held
 
-    c.key_injector.held.clear()
-    c.key_injector.released.clear()
+    c.global_key_injector.held.clear()
+    c.global_key_injector.released.clear()
     provider.release(c)
-    assert c.key_injector.held == [(1234, 49)]
-    assert c.key_injector.released == [(1234, 49)]
+    assert c.global_key_injector.held == [(1234, 49)]
+    assert c.global_key_injector.released == [(1234, 49)]
 
 
 def test_hotkey_missing_chord_logs_and_touches_no_key():
     provider = HotkeyProvider()
     c, logs = ctx(chord=None)
     provider.hold(c)
-    assert c.key_injector.held == []
+    assert c.global_key_injector.held == []
     assert logs and "no chord configured" in logs[0]
 
 
@@ -145,7 +155,7 @@ def test_hotkey_unsupported_chord_logs_and_touches_no_key():
     provider = HotkeyProvider()
     c, logs = ctx(chord="ctrl+space")
     provider.hold(c)
-    assert c.key_injector.held == []
+    assert c.global_key_injector.held == []
     assert "not yet drivable" in logs[0]
 
 

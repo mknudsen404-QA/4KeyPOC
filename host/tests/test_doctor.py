@@ -232,8 +232,8 @@ def test_check_accessibility_pyobjc_missing(monkeypatch):
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
-        if name == "Quartz":
-            raise ImportError("no Quartz")
+        if name == "ApplicationServices":
+            raise ImportError("no ApplicationServices")
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
@@ -318,10 +318,16 @@ def test_check_families_no_slots(tmp_path):
 def test_check_families_known_family_reports_tier(tmp_path, monkeypatch):
     from switchboard.families.base import Detection
     from switchboard.families.codex import CodexProfile
+    from switchboard.voice import hotkey as hotkey_module
 
     config_path = tmp_path / "agents.json"
     config_path.write_text(json.dumps({"agents": [{"slot": 1, "family": "codex"}]}))
     monkeypatch.setattr(CodexProfile, "detect", lambda self: Detection(True, "/usr/bin/codex"))
+    # Codex's tier depends on live hotkey-voice availability, not just
+    # detect() — pin it to "unavailable" so this test doesn't depend on
+    # whether Dictation happens to be enabled on the machine running it.
+    monkeypatch.setattr(hotkey_module, "_macos_dictation_enabled", lambda: False)
+    monkeypatch.setattr(hotkey_module, "KNOWN_DICTATION_APPS", ())
     check = doctor.check_families(config_path)
     assert "codex: found (status)" in check.detail
     assert check.level == "ok"

@@ -1,4 +1,5 @@
 from switchboard.families import DEFAULT_FAMILY, FamilyRegistry, registry
+from switchboard.families.antigravity import AntigravityProfile
 from switchboard.families.claude import ClaudeProfile
 from switchboard.families.codex import CodexProfile
 from switchboard.families.generic import GenericProfile
@@ -11,6 +12,7 @@ def test_default_family_is_codex():
 def test_get_known_family_returns_its_profile():
     assert isinstance(registry.get("claude"), ClaudeProfile)
     assert isinstance(registry.get("codex"), CodexProfile)
+    assert isinstance(registry.get("antigravity"), AntigravityProfile)
 
 
 def test_get_unknown_family_returns_generic_profile():
@@ -28,6 +30,7 @@ def test_infer_from_known_executable_basename():
     assert registry.infer("claude") == "claude"
     assert registry.infer("/usr/local/bin/claude --effort high") == "claude"
     assert registry.infer("codex") == "codex"
+    assert registry.infer("agy") == "antigravity"
 
 
 def test_infer_unknown_command_is_generic_not_codex():
@@ -56,6 +59,28 @@ def test_codex_effort_args_passes_through_all_five_values():
 
 def test_codex_effort_args_unknown_value_falls_back_to_medium():
     assert CodexProfile().effort_args("not-a-real-value") == ["-c", "model_reasoning_effort=medium"]
+
+
+def test_antigravity_effort_args_clamps_to_the_default_models_ceiling():
+    """Confirmed live: the default model (gemini-3.8-flash) only accepts
+    low/medium/high — xhigh/max are a hard launch error on this CLI, not
+    a no-op, so they must clamp down rather than pass through."""
+    profile = AntigravityProfile()
+    assert profile.effort_args("low") == ["--effort", "low"]
+    assert profile.effort_args("medium") == ["--effort", "medium"]
+    assert profile.effort_args("high") == ["--effort", "high"]
+    assert profile.effort_args("xhigh") == ["--effort", "high"]
+    assert profile.effort_args("max") == ["--effort", "high"]
+    assert profile.effort_args("not-a-real-value") == ["--effort", "medium"]
+
+
+def test_antigravity_hook_spec_is_none():
+    """No hooks wired yet — a real, documented gap (see the module
+    docstring), not an oversight. Must not claim hooks work."""
+    profile = AntigravityProfile()
+    assert profile.hook_spec() is None
+    assert profile.hook_status_for("Stop") is None
+    assert profile.capabilities().hooks is False
 
 
 def test_generic_profile_has_every_capability_false():
@@ -104,10 +129,15 @@ def test_capabilities_tiers(monkeypatch):
     assert ClaudeProfile().capabilities().tier == "full"
     assert CodexProfile().capabilities().tier == "status"
     assert GenericProfile("kimi").capabilities().tier == "launch_only"
+    # Antigravity has no hooks at all yet, so it can never reach "full" —
+    # it stays "status" even with voice available, unlike Codex.
+    assert AntigravityProfile().capabilities().tier == "status"
 
     monkeypatch.setattr(voice_module.registry, "get", lambda name: type("P", (), {"available": lambda self: Availability(True)})())
     assert CodexProfile().capabilities().tier == "full"
     assert CodexProfile().capabilities().voice is True
+    assert AntigravityProfile().capabilities().tier == "status"
+    assert AntigravityProfile().capabilities().voice is True
 
 
 def test_slash_commands_gives_key_intents_a_home():
@@ -124,7 +154,7 @@ def test_known_paths_map_only_lists_families_with_paths():
 
 
 def test_registry_never_raises_on_arbitrary_name():
-    for name in (None, "", "shell", "gemini", "kimi", "a slot with spaces"):
+    for name in (None, "", "shell", "gemini", "kimi", "antigravity", "a slot with spaces"):
         profile = registry.get(name)
         profile.detect()
         profile.effort_args("high")

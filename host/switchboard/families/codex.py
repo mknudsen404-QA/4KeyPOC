@@ -73,9 +73,17 @@ class CodexProfile:
 
     def default_voice(self) -> VoiceSpec:
         # No native voice of its own — hotkey (a system dictation app) is
-        # the plan's recommended answer for Codex. Not verified live (no
-        # chord configured by default) — see voice/hotkey.py's docstring.
-        return VoiceSpec(provider="hotkey")
+        # the plan's recommended answer for Codex. Confirmed live
+        # 2026-10-03: macOS built-in Dictation's shortcut was customized
+        # to the bare F13 key (no modifier, so KeyInjector's single-key
+        # limitation is a non-issue), with Dictation itself as a
+        # press-once-to-start/press-again-to-stop toggle, not a true
+        # hold — hence mode="toggle" (hotkey.py's toggle path: tap the
+        # chord on hold-start, tap it again on hold-stop). See
+        # voice/hotkey.py's docstring for why F13 specifically (an unused
+        # key with no typing meaning, synthesizable even on a keyboard
+        # that has no physical F13).
+        return VoiceSpec(provider="hotkey", chord="f13", mode="toggle")
 
     def slash_commands(self) -> tuple[str, ...]:
         # No documented slash-command list found for Codex's TUI (Phase 0

@@ -23,7 +23,7 @@ from switchboard.doctor import doctor_command
 from switchboard.families import DEFAULT_FAMILY
 from switchboard.hooks_install import install_hooks
 from switchboard.hooks_server import HOOK_HOST, HOOK_PORT
-from switchboard.key_injector import FakeKeyInjector, RepeatingKeyInjector, macos_key_repeat_timing
+from switchboard.key_injector import FakeKeyInjector, RepeatingKeyInjector, macos_key_repeat_timing, post_key_global
 from switchboard.launcher import (
     DEFAULT_AGENTS_CONFIG,
     DEFAULT_CWD,
@@ -245,10 +245,18 @@ def _make_bridge(args: argparse.Namespace, device, *, trace=None):
     terminal = NullTerminal() if (args.no_open or args.dry_run) else _terminal
     if isinstance(terminal, NullTerminal):
         key_injector = FakeKeyInjector()
+        global_key_injector = FakeKeyInjector()
     else:
         initial_delay, repeat_interval = macos_key_repeat_timing()
         key_injector = RepeatingKeyInjector(
             terminal.post_key, initial_delay=initial_delay, repeat_interval=repeat_interval, log=_default_log
+        )
+        # Separate injector, separate post_key: global OS shortcuts (the
+        # hotkey voice provider) need CGEventPost into the system-wide HID
+        # stream, not CGEventPostToPid at a specific app — see
+        # key_injector.post_key_global's docstring.
+        global_key_injector = RepeatingKeyInjector(
+            post_key_global, initial_delay=initial_delay, repeat_interval=repeat_interval, log=_default_log
         )
     if trace is None:
         trace = open_default(verbose=_trace_verbose_requested(args), on_error=_default_log)
@@ -257,6 +265,7 @@ def _make_bridge(args: argparse.Namespace, device, *, trace=None):
         device=device,
         terminal=terminal,
         key_injector=key_injector,
+        global_key_injector=global_key_injector,
         # flush=True: `listen` runs indefinitely with stdout redirected to
         # a plain file under the LaunchAgent (bridge.out.log, not a tty),
         # which CPython fully block-buffers by default — bare `print`

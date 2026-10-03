@@ -24,6 +24,13 @@ import subprocess
 import threading
 from typing import Callable, Protocol
 
+try:
+    import Quartz  # type: ignore[import]
+
+    QUARTZ_AVAILABLE = True
+except ImportError:
+    QUARTZ_AVAILABLE = False
+
 # Fallback cadence if reading the user's keyboard settings fails: macOS's
 # own defaults (250ms initial delay, then a key every ~33ms).
 DEFAULT_INITIAL_DELAY_S = 0.25
@@ -32,6 +39,34 @@ DEFAULT_REPEAT_INTERVAL_S = 0.033
 # Auto-release ceiling: a lost voice.hold.stop (e.g. the board is unplugged
 # mid-hold) must never leave a key stuck down indefinitely.
 DEFAULT_MAX_HOLD_S = 120.0
+
+
+def post_key_global(pid: int, keycode: int, down: bool) -> None:
+    """Posts a keyDown/keyUp into the system-wide HID event stream
+    (`CGEventPost`), not to one process's event queue (`CGEventPostToPid`,
+    `terminal.py`'s `post_key`). `pid` is accepted only to satisfy the
+    shared post_key(pid, keycode, down) signature `RepeatingKeyInjector`
+    expects — a global OS shortcut (Spotlight, a configured Dictation
+    shortcut, etc.) has no target process, so it's ignored.
+
+    This distinction is load-bearing, not cosmetic: confirmed by hand
+    (2026-10-03) that `CGEventPostToPid` targeting Terminal's pid does
+    *not* trigger a system-wide shortcut — it delivers straight to that
+    one process's queue, bypassing the OS's global-hotkey dispatch
+    entirely. `CGEventPost(kCGHIDEventTap, ...)` is what macOS's Keyboard
+    Settings shortcut recorder actually picked up when posting a bare
+    F13 to configure Dictation's shortcut. `claude_native` (typing a
+    space into Claude's own focused terminal) correctly uses the
+    pid-targeted path instead — that's "type into this specific app," not
+    "trigger a global shortcut."
+    """
+    if not QUARTZ_AVAILABLE:
+        raise RuntimeError(
+            "Quartz is not installed. Run the bridge with host/.venv/bin/python3, "
+            "or `pip install pyobjc-framework-Quartz` for whatever Python runs it."
+        )
+    event = Quartz.CGEventCreateKeyboardEvent(None, keycode, down)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
 
 class KeyInjector(Protocol):

@@ -82,6 +82,49 @@ Phase 4.4's validation — a Codex slot with `provider: hotkey` actually
 recording and landing text in the Codex prompt on a hold — is the next real
 gap, not a code gap.
 
+## Phase 4.4 validation (2026-10-03): hotkey confirmed live for Codex
+
+Built-in macOS Dictation was enabled (System Settings -> Keyboard ->
+Dictation), which immediately fixed `_macos_dictation_enabled()`'s
+detection — except the detection signal itself was stale (see
+`voice/hotkey.py`'s module docstring: the old `AppleDictationAutoEnable`
+global-domain key no longer exists on macOS 26; replaced with reading
+`com.apple.assistant.support`'s per-locale `Installed` flag).
+
+Dictation's default shortcut ("press Control twice") is a double-tap
+gesture this provider's single press-and-release can't drive. Its
+"Customize..." option accepts an arbitrary single key, including one
+synthesized rather than physically present on the keyboard: F13 was
+recorded by posting a synthetic keydown/keyup into the shortcut recorder
+while it was focused (`key_injector.post_key_global`), with no modifier
+and no typing meaning elsewhere, so it can't collide with anything.
+`families/codex.py`'s `default_voice()` now returns `chord="f13",
+mode="toggle"`.
+
+A second, more structural bug surfaced along the way: the shared
+`key_injector` (bound to `CGEventPostToPid`, targeting one process) is
+correct for `claude_native` typing into Claude's own focused terminal,
+but silently can't trigger a system-wide OS shortcut — `CGEventPostToPid`
+bypasses the global-hotkey dispatch entirely. Fixed by giving
+`VoiceContext` a second injector, `global_key_injector`, bound to
+`CGEventPost(kCGHIDEventTap, ...)` (system-wide), which `hotkey.py` now
+uses instead. See `key_injector.post_key_global`'s docstring and
+`voice/base.py`'s `VoiceContext` docstring for the distinction.
+
+End-to-end confirmed live: launched a real Codex slot, pressed the
+board's PTT key, got the macOS microphone/Terminal-automation permission
+prompts, granted them, and dictated text directly into the Codex prompt.
+Codex's support tier is genuinely **Full** now, not just reachable —
+`doctor`/the settings UI already computed this live from
+`hotkey.available()` rather than hardcoding it, so no separate change was
+needed there.
+
+Also fixed in passing: `doctor.check_accessibility()` imported
+`AXIsProcessTrusted` from the wrong module (`Quartz` instead of
+`ApplicationServices`), so it always reported "pyobjc missing" even when
+Accessibility was already granted — unrelated to hotkey specifically, but
+it was masking the real Accessibility state while debugging this.
+
 ## Not yet verified (needs a real 10-minute session with the hook server logging raw payloads, per the plan)
 
 1. Gemini CLI: install for real (not the scratch npm prefix used here),
@@ -132,3 +175,55 @@ gap, not a code gap.
   `moonshotai.github.io/kimi-code/en/customization/hooks.html`,
   `moonshotai.github.io/kimi-code/en/configuration/config-files.html`,
   `moonshotai.github.io/kimi-code/en/reference/kimi-command.html`.
+- Antigravity CLI: see the dedicated section below for sources (this spike
+  was run live on this machine, not from docs alone).
+
+## Antigravity CLI (Phase 0 spike, run live — 2026-10-03)
+
+Installed via `brew install --cask antigravity-cli` (binary `agy`,
+version 1.2.16 at spike time). Distinct from the `antigravity` and
+`antigravity-ide` casks, which are the GUI app and the VS Code-fork IDE —
+`antigravity-cli` is the one with an actual terminal/CLI surface, so it's
+the one that fits Switchboard's launch-into-a-Terminal-tab model. Shares
+its config root with Gemini CLI (`~/.gemini/antigravity-cli/`), and is
+itself Gemini-backed by default (see Effort below).
+
+| Capability | Antigravity CLI |
+|---|---|
+| Binary / install / version tested | `agy` 1.2.16 (`antigravity-cli` cask), `/opt/homebrew/bin/agy` |
+| Lifecycle hooks: events | 5, genuinely different shape from Claude/Codex/Gemini/Kimi: `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop`. **No `SessionStart`, `SessionEnd`, or `UserPromptSubmit` analog at all** — confirmed from the bundled spec, not inferred. |
+| Hook config file / shape | **Project-local** `.agents/hooks.json` (the doc's own example path), not a single global user config file — a real mechanical difference from every other family's "one file, merge by marker/rewrite group" approach. JSON object keyed by *named hook* (not grouped by event like Claude/Codex/Gemini), each hook object holding its own per-event handler lists. |
+| Hook execution model | **Synchronous, blocks the agent loop** (documented explicitly: "no async execution"). Each event has its own required JSON stdout contract (e.g. `PreToolUse` must return a `decision` of `allow`/`deny`/`ask`/`force_ask`; `Stop` must omit `"decision": "continue"` to let the agent actually stop) — unlike Claude/Codex/Gemini's fire-and-forget `curl ... \|\| true`, a malformed response here can stall or mis-gate the agent's own execution loop, not just fail to report status. |
+| Per-session env passthrough (`SWITCHBOARD_SLOT`) | **Unconfirmed** — not attempted this pass; hooks.json's `command` field says only that `~` expands and cwd is the hooks.json directory, nothing about environment sanitization either way. |
+| Effort/reasoning flag and accepted values | `--effort {low,medium,high,xhigh,max}` exists but is **not a uniform 5-tier flag** — legality depends entirely on the selected `--model`, and a mismatch is a hard launch error, not a clamp. Confirmed live: the default model (`gemini-3.8-flash`, used when `--model` is omitted) only accepts `low`/`medium`/`high`; `gemini-3.1-pro` only accepts `low`/`high` (no `medium`, `xhigh`, or `max` at all). `families/antigravity.py`'s `effort_args()` clamps `xhigh`/`max` down to `high` so a configured slot can never turn into a launch error — see its docstring for the exact error text that proved this. |
+| Native voice / dictation | **None found** in `agy --help` or its bundled docs. `mic-serve` serves *this* machine's microphone to a CLI on *another* host (a remote-session feature) — not local push-to-talk. Falls back to the same system-dictation `hotkey` provider Codex uses (F13 bound to macOS Dictation, confirmed live for Codex 2026-10-03) — **confirmed live for Antigravity too**, same session: a real `agy` slot launched, PTT held via the board's dedicated mic key, macOS Dictation transcribed directly into the Antigravity prompt. |
+| Slash-command surface usable from a key | Unknown — no documented slash-command list found. |
+| Session-end signal | **None** — the 5-event table has nothing that means "the CLI process exited," only `Stop` ("execution loop terminates," i.e. end of a turn). Same degrade path as Codex's missing `SessionStart`: a slot just sits at its last reported status until liveness probing notices the process is gone. |
+
+### Support tier: Launch + effort + voice, no live status (`"status"`)
+
+`AntigravityProfile.capabilities()` (like Codex's) computes this live
+rather than hardcoding it: `hooks=False` always (nothing wired yet —
+real gap, see above, not an oversight), `effort=True` always (clamped so
+it can never error), `voice` tracks `hotkey.available()` same as Codex.
+Confirmed live end-to-end this session: launched a real `agy` slot
+(`gemini-3.8-flash` by default — "wired up to Gemini" with zero extra
+flags, since that's Antigravity's own default model), selected it with
+the board's agent key, held the dedicated PTT key, and macOS Dictation
+transcribed text straight into the Gemini-backed session. What's
+*correctly* not claimed: no key-light/status auto-update, since nothing
+drives it — the slot stays at `launched` until a future pass builds the
+project-local-`hooks.json` + blocking-JSON-contract wrapper the hooks
+doc requires (tracked in `families/antigravity.py`'s module docstring,
+same scoped-gap precedent as Kimi's TOML merge strategy).
+
+A second, more structural bug surfaced and was fixed while verifying
+this: the shared `key_injector` (bound to `CGEventPostToPid`, targeting
+one process) is correct for `claude_native` typing into Claude's own
+focused terminal, but can't trigger a system-wide OS shortcut like
+Dictation's configured key — `CGEventPostToPid` bypasses the
+global-hotkey dispatch entirely. `VoiceContext` now carries a second
+injector, `global_key_injector`, bound to `CGEventPost(kCGHIDEventTap,
+...)`, which `hotkey.py` uses instead. This fix is what made both the
+Codex and Antigravity live PTT verifications above actually work — see
+`key_injector.post_key_global`'s docstring.

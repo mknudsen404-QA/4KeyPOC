@@ -25,10 +25,20 @@ class VoiceContext:
     """Everything hold()/release() need, without depending on Bridge or
     Terminal directly. `pid` is the terminal process to post keys to
     (already focused and settled by the time this is built — bridge.py's
-    job, not the provider's)."""
+    job, not the provider's).
+
+    Two injectors, because "type a key into the focused app" and
+    "trigger a system-wide OS shortcut" are genuinely different
+    operations (see key_injector.post_key_global's docstring):
+    `key_injector` posts to `pid` specifically (claude_native's hold-Space
+    inside Claude's own terminal); `global_key_injector` posts into the
+    system-wide HID event stream, ignoring `pid` (hotkey's chord, which
+    has to reach macOS's global shortcut dispatch, e.g. a Dictation
+    shortcut, not just one app's input queue)."""
 
     pid: int
     key_injector: KeyInjector
+    global_key_injector: KeyInjector
     chord: str | None = None
     mode: str = "hold"
     log: Callable[[str], None] = print

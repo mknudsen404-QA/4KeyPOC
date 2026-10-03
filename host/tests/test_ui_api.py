@@ -119,9 +119,15 @@ def test_voice_providers_get_matches_schema_vocabulary():
     assert reported == set(settings.VOICE_PROVIDERS)
 
 
-def test_voice_providers_get_hotkey_reported_unavailable():
-    """hotkey is schema-legal but not implemented yet (Phase 4) — must be
-    honest about that rather than claiming it works."""
+def test_voice_providers_get_hotkey_reported_unavailable(monkeypatch):
+    """hotkey's availability depends on the live machine (a dictation app
+    or macOS Dictation being enabled) — pin it off so this test doesn't
+    depend on whether that happens to be true on whatever machine runs
+    it, and confirms the honest-unavailable path is still reachable."""
+    from switchboard.voice import hotkey as hotkey_module
+
+    monkeypatch.setattr(hotkey_module, "_macos_dictation_enabled", lambda: False)
+    monkeypatch.setattr(hotkey_module, "KNOWN_DICTATION_APPS", ())
     providers = {p["name"]: p for p in api.voice_providers_get()["providers"]}
     assert providers["hotkey"]["available"] is False
     assert providers["claude_native"]["available"] is True
