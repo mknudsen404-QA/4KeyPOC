@@ -225,10 +225,61 @@ Two concrete bugs found, not a redesign:
 
 ## Workstream D — Make the settings UI findable without a terminal
 
-Today: `switchboard settings` is a CLI subcommand that only works while
-`listen` is already running, prints a URL, and opens the default browser
-once. A non-terminal user (the recipient of unit #2) has no way to know
-the bridge is running, healthy, or has a settings page at all.
+**Status (2026-10-03): done, built differently than originally proposed
+below — the owner asked for "an icon like every other application,
+double-click it and it opens settings" rather than a persistent menu bar
+status item, which is both simpler and needed no new dependency.**
+
+What shipped: `switchboard/osa_app.py`, a small shared helper that builds
+a plain double-clickable macOS `.app` via `osacompile` (built into macOS)
+wrapping one shell command, with `try`/`on error` AppleScript so a
+failure shows as a native notification (using the wrapped command's own
+stderr as the message) instead of silently doing nothing. Two apps built
+on it, both regenerated fresh by `setup.sh` on every run (paths are
+baked in per-machine, same reasoning as the LaunchAgent plist):
+
+- **`install_settings_app.py`** → `~/Applications/Switchboard Settings.app`
+  — wraps the existing `switchboard settings` CLI command verbatim, so a
+  double-click either opens the settings page or shows "No bridge is
+  listening..." as a notification if it isn't running.
+- **`install_update_app.py`** → `~/Applications/Switchboard Update.app`
+  — `git pull --ff-only && setup.sh`, with a success notification
+  ("Switchboard is up to date.") or the git/setup failure surfaced the
+  same way. This was the owner's own follow-up ask mid-session ("we
+  probably should have something very nice and simple for pushing
+  updates") — intentionally the simplest thing that could work for the
+  macOS-only, dev-checkout-based scope this whole pass is already
+  working within (`--ff-only` refuses rather than guesses if the local
+  checkout ever has commits of its own), not the full signed-release
+  `switchboard upgrade` from `auto-install-plan.md`.
+
+Both verified live end-to-end: double-clicked each, confirmed the
+settings page opened and the update notification appeared; separately
+verified the Settings app's failure path by stopping the bridge first
+(see the incident note below).
+
+Covered by `host/tests/test_osa_app.py` (the AppleScript-escaping logic
+specifically — the one part worth real test coverage; the two top-level
+install scripts stay untested like `install_bridge_launch_agent.py`
+already was, consistent with this repo's existing convention for that
+category of script).
+
+**Incident note**: stopping the bridge to test the Settings app's
+failure path (on the same slot actively being used for this session)
+caused a real `Stop` hook to be silently dropped — the fire-and-forget
+curl hook has no retry by design, so a slot's status can get stuck
+showing busy if the bridge happens to be down for the instant a hook
+fires. Not a new bug, just newly demonstrated; self-corrects on the next
+status-changing event once the bridge is back. No change made — logged
+here in case it's worth a retry/staleness fallback later.
+
+**Not built, and deliberately not**: the menu bar `rumps` approach
+originally proposed below, a full native app bundle project, a Dock
+icon, or any code signing/notarization — none of it was needed once the
+actual ask turned out to be simpler than the plan assumed.
+
+<details>
+<summary>Original proposal (superseded by the above)</summary>
 
 Proposed fix: a small macOS **menu bar helper** (status item, not a Dock
 app), the minimum-infra way to give this product a persistent "it's alive
@@ -256,6 +307,8 @@ and here's where to configure it" surface:
 - Explicitly not building: a full native app bundle, a Dock icon, or
   anything requiring code signing/notarization for this internal/gift-unit
   stage. `rumps` apps run fine unsigned for local/per-user use.
+
+</details>
 
 ## Workstream E — 4key board: close the fab-blocking punch list
 

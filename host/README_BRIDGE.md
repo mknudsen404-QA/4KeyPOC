@@ -315,9 +315,14 @@ python3 host/switchboard_bridge.py slots
 
 ## Settings web UI
 
-While the bridge (`listen`) is running, `switchboard settings` opens a small
-loopback-only web page for editing the same three slots `config` edits — no
-JSON, no terminal:
+The easiest way in: double-click `~/Applications/Switchboard Settings.app`
+(installed by `setup.sh`) — a plain macOS app, no terminal needed. If the
+bridge isn't running it shows a notification saying so instead of opening
+a dead page.
+
+While the bridge (`listen`) is running, `switchboard settings` opens the
+same small loopback-only web page for editing the same three slots
+`config` edits — no JSON, no terminal:
 
 ```sh
 python3 host/switchboard_bridge.py settings
@@ -558,6 +563,20 @@ The LaunchAgent writes:
 ```
 
 The installed bridge runs with `--auto-launch --retry`. It waits for the board, then launches/registers an empty agent slot when an agent button event arrives.
+
+## Updating
+
+Double-click `~/Applications/Switchboard Update.app` (installed by
+`setup.sh`): it runs `git pull --ff-only` in this checkout, then re-runs
+`setup.sh` so any new hooks/dependencies/LaunchAgent changes apply, and
+shows a notification either way ("Switchboard is up to date." on
+success, or the git/setup error if something went wrong — e.g. a
+non-fast-forward pull because the checkout has local commits of its
+own). The same thing by hand:
+
+```sh
+git pull --ff-only && host/setup.sh
+```
 
 ## CLI discovery
 

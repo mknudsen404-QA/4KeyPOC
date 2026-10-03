@@ -68,6 +68,15 @@ step "Installing the login LaunchAgent"
 "$HOST_DIR/.venv/bin/python3" "$HOST_DIR/install_bridge_launch_agent.py" | sed 's/^/  /'
 ok "Bridge will now start automatically at login"
 
+# --- desktop apps ----------------------------------------------------------
+# Plain double-clickable .app bundles (osacompile, no new dependency, no
+# signing) so settings and updates never require knowing a CLI command
+# exists. Always rebuilt fresh in case the checkout moved.
+step "Installing Settings and Update apps"
+"$HOST_DIR/.venv/bin/python3" "$HOST_DIR/install_settings_app.py" | sed 's/^/  /'
+"$HOST_DIR/.venv/bin/python3" "$HOST_DIR/install_update_app.py" | sed 's/^/  /'
+ok "~/Applications/Switchboard Settings.app and Switchboard Update.app"
+
 # --- verify ----------------------------------------------------------------
 # A real check, not an assumption: doctor probes the socket/subprocess/file
 # state this install just created (hooks actually merged, LaunchAgent
@@ -111,6 +120,8 @@ cat <<EOF
          launchctl load ~/Library/LaunchAgents/com.switchboard.bridge.plist
        (or just re-run this script)
 
-  Logs:   ~/Library/Logs/Switchboard/bridge.{out,err}.log
-  Config: host/agents.json
+  Settings: double-click ~/Applications/Switchboard Settings.app
+  Updates:  double-click ~/Applications/Switchboard Update.app
+  Logs:     ~/Library/Logs/Switchboard/bridge.{out,err}.log
+  Config:   host/agents.json
 EOF
