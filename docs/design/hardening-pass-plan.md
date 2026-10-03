@@ -176,6 +176,22 @@ Reuses ideas from `auto-install-plan.md` Phase 2 (steps-as-objects,
 
 ## Workstream C — Close the unbounded-log gap for real
 
+**Status (2026-10-03): done, exactly as scoped, verified live.** Both
+bugs fixed: `bridge.err.log` now rotates (it never did before), and
+rotation is continuous, not just at process start — `RotatingStream`
+(`host/switchboard/trace.py`) reassigns `sys.stdout`/`sys.stderr` to
+instances backed by `logging.handlers.RotatingFileHandler` (same
+mechanism `TraceWriter` already used for `trace.jsonl`), active only
+under the LaunchAgent (`SWITCHBOARD_MANAGED_LOGS=1`, set in the plist) so
+an interactive terminal run is unaffected. `install_bridge_launch_agent.py`
+keeps launchd's own `StandardOutPath`/`StandardErrorPath` as a
+crash-visibility fallback for the brief window before reassignment runs.
+Verified live: regenerated the plist, restarted the LaunchAgent, confirmed
+fresh timestamped lines land in `bridge.out.log` through the new path and
+`doctor` stays green. Audited for other unbounded writes
+(`grep -rn "open(.*['\"]a['\"]"`) — none found; `agent_registry.json` is
+rewritten whole, not appended, so it was never a log in the first place.
+
 Two concrete bugs found, not a redesign:
 
 1. **`bridge.err.log` is never rotated at all.** `_rotate_bridge_out_log`

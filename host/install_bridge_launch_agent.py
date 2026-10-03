@@ -46,10 +46,18 @@ def build_plist(args: argparse.Namespace) -> dict:
         "RunAtLoad": True,
         "KeepAlive": True,
         "WorkingDirectory": str(HOST_DIR.parent),
+        # launchd's own redirection stays as a crash-visibility fallback
+        # for the brief window before the bridge reassigns sys.stdout/
+        # sys.stderr to its own RotatingStream instances (cli.py's
+        # _install_rotating_stdio) — after that point these paths are
+        # written by the bridge itself, with real continuous rotation,
+        # not by launchd's fd inheritance. See RotatingStream's docstring
+        # for why that distinction matters for a KeepAlive process.
         "StandardOutPath": str(LOG_DIR / "bridge.out.log"),
         "StandardErrorPath": str(LOG_DIR / "bridge.err.log"),
         "EnvironmentVariables": {
             "PATH": os.environ.get("PATH", "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"),
+            "SWITCHBOARD_MANAGED_LOGS": "1",
         },
     }
 

@@ -317,8 +317,8 @@ def listen(args: argparse.Namespace) -> int:
     from switchboard.bridge import _default_log
     from switchboard.trace import open_default
 
+    _install_rotating_stdio()
     trace = open_default(verbose=_trace_verbose_requested(args), on_error=_default_log)
-    _rotate_bridge_out_log()
 
     if args.sample:
         sample = HOST_DIR / "sample_events.jsonl"
@@ -379,28 +379,33 @@ def listen(args: argparse.Namespace) -> int:
             device.close()
 
 
-def _rotate_bridge_out_log(max_bytes: int = 5_000_000) -> None:
-    """bridge.out.log is written by launchd's stdout redirection, not by
-    this process, so it can't be rotated with a RotatingFileHandler the
-    way trace.jsonl is — the bridge doesn't own that file descriptor.
-    Instead, at the start of each `listen`, if the file has grown past
-    max_bytes, rename it out of the way: launchd keeps writing to the
-    renamed inode for the rest of this run (imperfect, but requires no
-    sudo/newsyslog config), and the next bridge start gets a fresh file.
-    A no-op when SWITCHBOARD_LOG_DIR isn't set and $HOME/Library/Logs/
-    Switchboard/bridge.out.log doesn't exist or is small.
-    """
-    from switchboard.trace import log_dir
+def _install_rotating_stdio() -> None:
+    """Replace sys.stdout/sys.stderr with RotatingStream instances backing
+    bridge.out.log/bridge.err.log, so a long-running `listen` under the
+    LaunchAgent actually bounds its own output continuously instead of
+    only at process start (see RotatingStream's docstring for why the
+    old rename-on-start approach couldn't do that for the *current*
+    process's writes).
 
-    path = log_dir() / "bridge.out.log"
+    Only active when SWITCHBOARD_MANAGED_LOGS=1 (set by
+    install_bridge_launch_agent.py) — an interactive `listen` run in a
+    terminal should keep printing to that terminal, not get silently
+    redirected to a file. launchd's own StandardOutPath/StandardErrorPath
+    stays in the plist as a crash-visibility fallback for the brief
+    window before this function runs (or if it fails); everything printed
+    after this point goes through these instances instead, each owning
+    its own file handle rather than inheriting launchd's fd.
+    """
+    if os.environ.get("SWITCHBOARD_MANAGED_LOGS") != "1":
+        return
+    from switchboard.trace import RotatingStream, log_dir
+
     try:
-        if path.stat().st_size <= max_bytes:
-            return
-        rotated = path.with_name(path.name + ".1")
-        rotated.unlink(missing_ok=True)
-        path.rename(rotated)
+        directory = log_dir()
+        sys.stdout = RotatingStream(directory / "bridge.out.log")
+        sys.stderr = RotatingStream(directory / "bridge.err.log")
     except OSError:
-        pass  # best-effort: never block startup over log rotation
+        pass  # best-effort: never block startup over log management
 
 
 def _add_listen_flags(parser: argparse.ArgumentParser) -> None:

@@ -406,12 +406,18 @@ Pass `--trace-verbose` (or set `SWITCHBOARD_TRACE_VERBOSE=1`, for the
 LaunchAgent case) to keep full hook payloads instead, for a session
 where you're actively reproducing something on your own machine.
 
-Both `trace.jsonl` and `bridge.out.log` are size-bounded (rotated at
-5&nbsp;MB) — `bridge.out.log`'s own noisiest lines (`No USB serial port
-found`, printed once per retry while the board is unplugged) are also
-collapsed to a first occurrence plus an occasional marker instead of one
-line per tick, which was 179,386 of 179,734 lines in a one-week capture
-before this existed.
+`trace.jsonl`, `bridge.out.log`, and `bridge.err.log` are all
+size-bounded (rotated continuously at 5&nbsp;MB, 2 backups kept) — under
+the LaunchAgent, the bridge owns its own stdout/stderr (reassigned at
+startup, `SWITCHBOARD_MANAGED_LOGS=1` in the plist) rather than relying
+on launchd's raw fd redirection, specifically so a `KeepAlive` process
+that stays up for weeks still rotates mid-run, not only across restarts.
+An interactive `listen` run in a terminal is unaffected and keeps
+printing normally. `bridge.out.log`'s own noisiest lines (`No USB serial
+port found`, printed once per retry while the board is unplugged) are
+also collapsed to a first occurrence plus an occasional marker instead
+of one line per tick, which was 179,386 of 179,734 lines in a one-week
+capture before this existed.
 
 To hand a bug to someone else (or to us), zip everything up:
 

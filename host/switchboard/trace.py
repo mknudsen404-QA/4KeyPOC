@@ -133,6 +133,58 @@ class TraceWriter:
             self._handler.close()
 
 
+class RotatingStream:
+    """A minimal file-like object (write/flush/close) backing bridge.out.log
+    / bridge.err.log with real, continuous rotation — not the one-shot,
+    only-at-process-start rename `cli.py`'s old `_rotate_bridge_out_log`
+    did. That approach couldn't actually bound a long-running process's
+    own output: launchd hands the process a raw fd for its whole life
+    (`StandardOutPath`/`StandardErrorPath`), so renaming the path mid-run
+    only helped the *next* restart — the *current* process kept writing
+    into the now-unlinked-by-name inode until it exited. A LaunchAgent
+    with `KeepAlive: True` can run for weeks without restarting, so that
+    was effectively unbounded growth between restarts.
+
+    The fix: stop relying on launchd's fd inheritance for ongoing writes.
+    `sys.stdout`/`sys.stderr` get reassigned (see `cli.py`'s
+    `_install_rotating_stdio`) to instances of this class, which own
+    their own file handle and check its size on every write — exactly
+    the rotate-at-any-point guarantee `TraceWriter` already gives
+    trace.jsonl via `RotatingFileHandler`, reused here directly rather
+    than reimplemented (`doRollover()` needs no `LogRecord`; it only
+    needs to be told "roll now").
+    """
+
+    def __init__(self, path: Path, *, max_bytes: int = DEFAULT_MAX_BYTES, backup_count: int = DEFAULT_BACKUP_COUNT) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._handler = logging.handlers.RotatingFileHandler(
+            str(path), maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8", delay=True
+        )
+
+    def write(self, text: str) -> int:
+        if not text:
+            return 0
+        if self._handler.stream is None:
+            self._handler.stream = self._handler._open()
+        if self._handler.maxBytes > 0:
+            self._handler.stream.seek(0, 2)  # os.SEEK_END
+            if self._handler.stream.tell() + len(text.encode("utf-8", "replace")) >= self._handler.maxBytes:
+                self._handler.doRollover()
+                # delay=True means doRollover() leaves stream as None
+                # (it only reopens immediately when delay=False).
+                if self._handler.stream is None:
+                    self._handler.stream = self._handler._open()
+        self._handler.stream.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        if self._handler.stream is not None:
+            self._handler.stream.flush()
+
+    def close(self) -> None:
+        self._handler.close()
+
+
 class NullTraceWriter:
     """Same interface as TraceWriter, does nothing. The default for every
     existing caller/test so adding tracing never changes behavior for

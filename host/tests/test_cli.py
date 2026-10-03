@@ -2,6 +2,7 @@ import argparse
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 from switchboard import cli
 
@@ -223,31 +224,72 @@ def test_repeater_no_summary_after_single_occurrence(capsys):
     assert lines == ["waiting", "connected"]
 
 
-def test_rotate_bridge_out_log_leaves_small_file_alone(tmp_path, monkeypatch):
+def test_install_rotating_stdio_is_a_noop_without_the_env_flag(tmp_path, monkeypatch):
+    """An interactive `listen` run (no LaunchAgent) must keep printing to
+    its real terminal, not get silently redirected to a file."""
     monkeypatch.setenv("SWITCHBOARD_LOG_DIR", str(tmp_path))
-    log_path = tmp_path / "bridge.out.log"
-    log_path.write_text("small")
-    cli._rotate_bridge_out_log(max_bytes=1000)
-    assert log_path.read_text() == "small"
-    assert not (tmp_path / "bridge.out.log.1").exists()
+    monkeypatch.delenv("SWITCHBOARD_MANAGED_LOGS", raising=False)
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    try:
+        cli._install_rotating_stdio()
+        assert sys.stdout is original_stdout
+        assert sys.stderr is original_stderr
+    finally:
+        sys.stdout, sys.stderr = original_stdout, original_stderr
 
 
-def test_rotate_bridge_out_log_renames_when_over_budget(tmp_path, monkeypatch):
+def test_install_rotating_stdio_replaces_streams_when_managed(tmp_path, monkeypatch):
     monkeypatch.setenv("SWITCHBOARD_LOG_DIR", str(tmp_path))
-    log_path = tmp_path / "bridge.out.log"
-    log_path.write_text("x" * 2000)
-    cli._rotate_bridge_out_log(max_bytes=1000)
-    assert not log_path.exists()
-    assert (tmp_path / "bridge.out.log.1").read_text() == "x" * 2000
+    monkeypatch.setenv("SWITCHBOARD_MANAGED_LOGS", "1")
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    try:
+        cli._install_rotating_stdio()
+        print("hello out")
+        print("hello err", file=sys.stderr)
+        sys.stdout.flush()
+        sys.stderr.flush()
+    finally:
+        sys.stdout, sys.stderr = original_stdout, original_stderr
+    assert "hello out" in (tmp_path / "bridge.out.log").read_text()
+    assert "hello err" in (tmp_path / "bridge.err.log").read_text()
 
 
-def test_rotate_bridge_out_log_overwrites_old_backup(tmp_path, monkeypatch):
-    monkeypatch.setenv("SWITCHBOARD_LOG_DIR", str(tmp_path))
-    (tmp_path / "bridge.out.log.1").write_text("stale")
-    log_path = tmp_path / "bridge.out.log"
-    log_path.write_text("x" * 2000)
-    cli._rotate_bridge_out_log(max_bytes=1000)
-    assert (tmp_path / "bridge.out.log.1").read_text() == "x" * 2000
+def test_rotating_stream_rotates_continuously_not_just_at_start():
+    """The bug this replaces: the old rename-on-start approach couldn't
+    bound a long-running process's *own* writes, only the next restart's
+    file. RotatingStream must actually roll over mid-run."""
+    import tempfile
+
+    from switchboard.trace import RotatingStream
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "bridge.out.log"
+        stream = RotatingStream(path, max_bytes=100, backup_count=2)
+        try:
+            for _ in range(50):
+                stream.write("x" * 20 + "\n")
+            stream.flush()
+        finally:
+            stream.close()
+        assert path.stat().st_size < 1000  # bounded, not 50*21 bytes unbounded
+        assert (Path(tmp) / "bridge.out.log.1").exists()
+
+
+def test_rotating_stream_leaves_small_writes_alone():
+    import tempfile
+
+    from switchboard.trace import RotatingStream
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "bridge.err.log"
+        stream = RotatingStream(path, max_bytes=10_000, backup_count=2)
+        try:
+            stream.write("small\n")
+            stream.flush()
+        finally:
+            stream.close()
+        assert path.read_text() == "small\n"
+        assert not (Path(tmp) / "bridge.err.log.1").exists()
 
 
 def test_support_bundle_parse_duration_accepts_units():
@@ -295,9 +337,14 @@ def test_support_bundle_command_defaults_out_to_desktop(tmp_path, monkeypatch):
     assert len(produced) == 1
 
 
-def test_rotate_bridge_out_log_missing_file_is_a_noop(tmp_path, monkeypatch):
+def test_install_rotating_stdio_is_a_noop_when_nothing_logged_yet(tmp_path, monkeypatch):
     monkeypatch.setenv("SWITCHBOARD_LOG_DIR", str(tmp_path))
-    cli._rotate_bridge_out_log()  # must not raise when nothing has ever been logged yet
+    monkeypatch.setenv("SWITCHBOARD_MANAGED_LOGS", "1")
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    try:
+        cli._install_rotating_stdio()  # must not raise with a fresh, empty log dir
+    finally:
+        sys.stdout, sys.stderr = original_stdout, original_stderr
 
 
 def test_listen_announces_a_stuck_bad_port_once_not_per_retry(tmp_path, monkeypatch, capsys):
