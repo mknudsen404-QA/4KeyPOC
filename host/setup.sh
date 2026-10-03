@@ -68,6 +68,32 @@ step "Installing the login LaunchAgent"
 "$HOST_DIR/.venv/bin/python3" "$HOST_DIR/install_bridge_launch_agent.py" | sed 's/^/  /'
 ok "Bridge will now start automatically at login"
 
+# --- verify ----------------------------------------------------------------
+# A real check, not an assumption: doctor probes the socket/subprocess/file
+# state this install just created (hooks actually merged, LaunchAgent
+# actually loaded, agents.json actually valid) and exits non-zero only on a
+# genuine [fail] — a board not being plugged in yet is already a [warn], not
+# a [fail], so this is safe to run unconditionally, board or no board.
+step "Verifying the install"
+# The bridge just (re)started above and needs a moment to bind its hook
+# server — without this, doctor can catch it mid-startup and print a
+# spurious "[warn] hook port: nothing listening" on an install that's
+# actually fine. Bounded poll, not a blind sleep: moves on the instant the
+# port answers, gives up after 5s either way (doctor's own warn-not-fail
+# behavior covers a genuinely slow/stuck bridge).
+for _ in 1 2 3 4 5; do
+  "$HOST_DIR/.venv/bin/python3" -c "import socket; socket.create_connection(('127.0.0.1', 8877), timeout=0.5).close()" 2>/dev/null && break
+  sleep 1
+done
+set +e
+"$HOST_DIR/.venv/bin/python3" "$HOST_DIR/switchboard_bridge.py" doctor | sed 's/^/  /'
+doctor_status=$?
+set -e
+if [ "$doctor_status" -ne 0 ]; then
+  die "Setup finished, but doctor found a real problem above ([fail]) — fix it, then re-run ./setup.sh to confirm."
+fi
+ok "doctor: no failures"
+
 # --- summary ---------------------------------------------------------------
 printf '\n%s%sSetup complete%s\n' "$BOLD" "$GREEN" "$RESET"
 cat <<EOF

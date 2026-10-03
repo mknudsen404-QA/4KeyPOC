@@ -95,6 +95,50 @@ if it turns out IDE-only with no terminal/hook surface, the honest
 
 ## Workstream B — macOS install hardening (no MSC drive, no Windows)
 
+**Status (2026-10-03): 1 done, 2 smoke-tested live (not a full matrix), 3
+confirmed already adequate, 4 confirmed already structurally safe.**
+
+- **1 — done.** `doctor` already exits non-zero only on a genuine `[fail]`
+  (board-unplugged states were already `[warn]`, confirmed by reading
+  every check in `doctor.py` — no separate `--strict` flag was needed).
+  The actual gap was that `setup.sh` never called it at all; it now runs
+  `doctor` as its final step and `die`s with a clear message if anything
+  comes back `[fail]`. Found and fixed a real race surfaced by this: right
+  after `install_bridge_launch_agent.py` restarts the bridge, the hook
+  server needs a moment to bind its socket — `doctor` run immediately
+  after could catch it mid-startup and print a spurious `[warn] hook
+  port: nothing listening` on an install that was actually fine. Fixed
+  with a bounded poll (up to 5s, moves on the instant the port answers)
+  rather than a blind sleep.
+- **2 — smoke-tested live on the real dev machine, twice in a row**
+  (already fully set up: venv/agents.json/hooks/LaunchAgent all present).
+  Both runs correctly skipped what existed, reported hooks "unchanged,"
+  and the new `doctor` gate passed clean on the second run (after the
+  race fix). This confirms the already-set-up case is genuinely
+  idempotent; it is **not** the synthetic half-state test matrix the plan
+  originally asked for (hooks-but-no-LaunchAgent, LaunchAgent-but-no-venv,
+  etc.) — that would need a sandboxed `$HOME` harness and is still real,
+  open follow-up work, not attempted this pass.
+- **3 — already adequate, no change needed.** `doctor`'s `LaunchAgent`
+  check already covers load state live (confirmed: it shells out to
+  `launchctl print` and reports `[warn]` if not loaded) — `switchboard
+  doctor` already is the "is it healthy right now" command the plan asked
+  for; nothing to add.
+- **4 — already structurally safe, documented rather than changed.**
+  `install_bridge_launch_agent.py` always writes to the same fixed path
+  (`~/Library/LaunchAgents/com.switchboard.bridge.plist`) under the same
+  fixed label (`com.switchboard.bridge`), computed fresh from `__file__`
+  at run time — launchd only ever tracks one job per label, so re-running
+  `setup.sh` from a different checkout path correctly overwrites and
+  reloads the single existing entry rather than creating a second one.
+  Confirmed no legacy/differently-labeled plist exists on this machine
+  today. The one scenario this doesn't cover — a bridge started by hand
+  outside the LaunchAgent, left running, fighting over the serial port —
+  is already *detected* by `doctor`'s serial-port check ("another bridge
+  is running... busy"); actually *preventing* that (a pidfile/lock before
+  `listen` binds the port) would be new mechanism for a rare, already-visible
+  case, and wasn't built this pass.
+
 Goal: `setup.sh` / the LaunchAgent survive re-runs, upgrades, and a
 half-broken prior state without the user ever opening a terminal twice.
 Reuses ideas from `auto-install-plan.md` Phase 2 (steps-as-objects,
