@@ -28,8 +28,14 @@ mic key survives a tier upgrade.
 PITCH = 19.05          # standard MX key spacing, 0.75"
 COLS = 4               # every tier is 4 columns wide
 MARGIN = 5.5           # board margin around the key field
-STRIP = 46.0           # electronics strip along the top edge (holds the module,
-                       # USB-C, expander, and the ESP32 antenna keepout)
+STRIP = 58.0           # electronics strip along the top edge (holds the module,
+                       # USB-C, expander, and the ESP32 antenna keepout).
+                       # Grown from 46mm after the first fully-routed 4key
+                       # attempt showed the I2C expander/pull-up/header
+                       # cluster packed so tightly against the rest of the
+                       # strip that neither FreeRouting nor hand-routing
+                       # could close the last two nets - this buys that
+                       # cluster 12mm more vertical room to spread into.
 BOARD_W = 2 * MARGIN + COLS * PITCH        # 87.2 mm on every tier
 
 REV = 1                # board revision. BUMP THIS and the tally marks follow.
@@ -134,7 +140,7 @@ def build(tier):
     parts.append(Part(
         "U2", "Interface_Expansion:PCF8575DBR", "XL9555 / PCF8575 (TSSOP-24)",
         "Package_SO:TSSOP-24_4.4x7.8mm_P0.65mm", exp_pins,
-        sch=(285, 130), pcb=(62.0, 32.0), rot=0, nc=exp_nc,
+        sch=(285, 130), pcb=(62.0, 42.0), rot=0, nc=exp_nc,
         desc="16-bit I2C GPIO expander reading every key. A2:A1:A0 = 000 -> 0x20."))
 
     # --- U3  3V3 LDO ------------------------------------------------------
@@ -175,15 +181,19 @@ def build(tier):
     # net renaming on either side). Pinout confirmed against the symbol
     # KiCad actually ships (Power_Protection.kicad_sym's USBLC6-2P6, which
     # USBLC6-2SC6 extends): 1/6 = I/O1, 3/4 = I/O2, 2 = GND, 5 = VBUS.
-    # Left unrouted like the rest of the differential pair (see the
-    # README's "a person's eye, not a script" note) - this only adds the
-    # part and its net assignments so it exists in the schematic/BOM.
+    # Placed in the open bay directly below/right of J1 (clear of C8, C5,
+    # R2/R3) once real USB_DP/USB_DM routing (gen_pcb.py's route_remaining)
+    # showed where that corridor actually runs - a first placement attempt
+    # at (36,24), picked before that routing existed, forced the
+    # differential pair clear across the board to reach it; moved here so
+    # the tap is genuinely short, which is also just better ESD practice
+    # (as close to the connector as the board allows).
     parts.append(Part(
         "D_ESD", "Power_Protection:USBLC6-2SC6", "USBLC6-2SC6",
         "Package_TO_SOT_SMD:SOT-23-6",
         {"1": "USB_DM", "6": "USB_DM", "3": "USB_DP", "4": "USB_DP",
          "2": "GND", "5": "+5V"},
-        sch=(55, 90), pcb=(36.0, 24.0), rot=0,
+        sch=(55, 90), pcb=(73.0, 30.0), rot=0,
         desc="Very-low-capacitance ESD protection, shunted across the "
              "existing USB_DP/USB_DM/+5V/GND nets right at the connector."))
 
@@ -195,7 +205,7 @@ def build(tier):
          "5": "SDA", "6": "SCL",
          "7": "HDR_IO38", "8": "HDR_IO6", "9": "HDR_IO7", "10": "HDR_IO10",
          "11": "HDR_TXD0", "12": "HDR_RXD0"},
-        sch=(285, 255), pcb=(76.0, 24.0), rot=0,
+        sch=(285, 255), pcb=(76.0, 34.0), rot=0,
         desc="Spare I2C + GPIO for a future encoder / display / second expander."))
 
     # --- Passives ---------------------------------------------------------
@@ -203,9 +213,16 @@ def build(tier):
         ("R1", "10k",  R0603, {"1": "+3V3", "2": "~RESET"}, (40, 200), (46.0, 24.0)),
         ("R2", "5.1k", R0603, {"1": "CC1", "2": "GND"},     (60, 200), (66.0, 12.0)),
         ("R3", "5.1k", R0603, {"1": "CC2", "2": "GND"},     (80, 200), (62.5, 12.0)),
-        ("R4", "4.7k", R0603, {"1": "+3V3", "2": "SDA"},    (100, 200), (46.0, 28.0)),
-        ("R5", "4.7k", R0603, {"1": "+3V3", "2": "SCL"},    (120, 200), (46.0, 32.0)),
-        ("R6", "10k",  R0603, {"1": "+3V3", "2": "EXP_INT"}, (140, 200), (66.0, 38.0)),
+        # R4/R5 placed right next to U2 (pcb=(62,42)), not clear across the
+        # board - an earlier layout had them at x=46 (next to R1's ~RESET
+        # pull-up, which made sense schematically but not physically) and
+        # it meant their SDA/SCL traces had to cross every other bus lane
+        # on the board to reach U2, which both the autorouter and a manual
+        # routing attempt failed to close. I2C pull-ups belong next to the
+        # device they pull up.
+        ("R4", "4.7k", R0603, {"1": "+3V3", "2": "SDA"},    (100, 200), (68.0, 40.0)),
+        ("R5", "4.7k", R0603, {"1": "+3V3", "2": "SCL"},    (120, 200), (68.0, 44.0)),
+        ("R6", "10k",  R0603, {"1": "+3V3", "2": "EXP_INT"}, (140, 200), (66.0, 48.0)),
         ("R7", "330",  R0603, {"1": "LED_BUF", "2": "LEDCH0"}, (160, 200), (9.5, 34.5)),
     ]
     caps = [
@@ -213,7 +230,7 @@ def build(tier):
         ("C2", "1u",    C0603, {"1": "+5V", "2": "GND"},  (60, 300), (60.0, 10.0)),
         ("C3", "10u",   C0805, {"1": "+3V3", "2": "GND"}, (80, 300), (60.0, 19.0)),
         ("C4", "100n",  C0603, {"1": "+3V3", "2": "GND"}, (100, 300), (11.0, 22.5)),
-        ("C5", "100n",  C0603, {"1": "+3V3", "2": "GND"}, (120, 300), (70.0, 24.0), 180),
+        ("C5", "100n",  C0603, {"1": "+3V3", "2": "GND"}, (120, 300), (70.0, 34.0), 180),
         ("C6", "1u",    C0603, {"1": "~RESET", "2": "GND"}, (140, 300), (6.0, 36.0)),
         ("C7", "100n",  C0603, {"1": "+5V", "2": "GND"},  (160, 300), (9.5, 30.0)),
         ("C8", "22u",   C0805, {"1": "+5V", "2": "GND"},  (180, 300), (79.0, 16.0)),
@@ -225,7 +242,7 @@ def build(tier):
         # module's supply pin. Not placed literally at the pin - the whole
         # left margin is already packed solid; see gen_pcb.py's route_strip
         # comment on C9 for exactly why and where this landed instead.
-        ("C9", "10u",   C0805, {"1": "+3V3", "2": "GND"}, (200, 300), (41.0, 33.0)),
+        ("C9", "10u",   C0805, {"1": "+3V3", "2": "GND"}, (200, 300), (41.0, 38.0)),
     ]
     for row in passives:
         ref, val, fp, pins, sch, pcb = row[:6]
@@ -239,7 +256,7 @@ def build(tier):
     # Reset + boot buttons
     parts.append(Part("SW_RST", "Switch:SW_Push", "RESET",
                       "Button_Switch_SMD:SW_Push_1P1T_NO_CK_KMR2",
-                      {"1": "~RESET", "2": "GND"}, sch=(60, 355), pcb=(5.0, 40.0)))
+                      {"1": "~RESET", "2": "GND"}, sch=(60, 355), pcb=(5.0, 46.0)))
     parts.append(Part("SW_BOOT", "Switch:SW_Push", "BOOT",
                       "Button_Switch_SMD:SW_Push_1P1T_NO_CK_KMR2",
                       {"1": "BOOT", "2": "GND"}, sch=(110, 355), pcb=(5.0, 24.0)))
