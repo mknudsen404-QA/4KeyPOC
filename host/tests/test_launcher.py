@@ -1,3 +1,4 @@
+import json
 import shlex
 
 import pytest
@@ -84,6 +85,34 @@ def test_launcher_build_launch_golden(monkeypatch, tmp_path):
         "effort": "high",
         "voice": {"provider": "claude_native", "chord": None, "mode": "hold"},
     }
+
+
+def test_build_launch_does_not_write_hooks_json_for_claude(monkeypatch, tmp_path):
+    """Claude/Codex's hooks are installed once, globally (install-hooks /
+    setup.sh) — launching a slot must never touch a project-local file."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "Documents" / "foo").mkdir(parents=True)
+    monkeypatch.setattr(launcher, "resolve_command", lambda cmd: "/usr/bin/claude")
+
+    config = {"agents": [{"slot": 2, "family": "claude", "command": "claude", "cwd": "~/Documents/foo"}]}
+    launcher.build_launch(2, config)
+    assert not (tmp_path / "Documents" / "foo" / ".agents").exists()
+
+
+def test_build_launch_installs_project_local_hooks_for_antigravity(monkeypatch, tmp_path):
+    """Antigravity's hooks.json is project-local (see
+    families/antigravity.py) — launching a slot must (re)install it into
+    that slot's own cwd, since there's no global config to install once."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "Documents" / "foo").mkdir(parents=True)
+    monkeypatch.setattr(launcher, "resolve_command", lambda cmd: "/usr/bin/agy")
+
+    config = {"agents": [{"slot": 2, "family": "antigravity", "command": "agy", "cwd": "~/Documents/foo"}]}
+    launcher.build_launch(2, config)
+
+    hooks_path = tmp_path / "Documents" / "foo" / ".agents" / "hooks.json"
+    assert hooks_path.exists()
+    assert "switchboard" in json.loads(hooks_path.read_text())
 
 
 def test_build_launch_overrides_win_over_config(monkeypatch, tmp_path):

@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from switchboard.families import registry as family_registry
+from switchboard.families.antigravity import NAME as ANTIGRAVITY_FAMILY
 from switchboard.families.base import HookSpec
 from switchboard.families.claude import NAME as CLAUDE_FAMILY
 from switchboard.families.codex import NAME as CODEX_FAMILY
@@ -36,6 +37,56 @@ def _hook_command(event: str, spec: HookSpec) -> str:
         f'-H "X-Switchboard-Slot: $SWITCHBOARD_SLOT" -d @- >/dev/null 2>&1 || true'
     )
     return base + spec.command_suffix
+
+
+# Antigravity reads a hook's actual stdout and blocks its own agent loop
+# on it (unlike Claude/Codex's fire-and-forget curl, whose stdout is
+# thrown away — see _hook_command above) — getting this wrong doesn't
+# just fail to report status, it can stall or mis-gate tool execution.
+# This is the exact JSON each event's contract requires when Switchboard
+# itself has no opinion (see ~/.gemini/antigravity-cli/builtin/skills/
+# agy-customizations/docs/hooks.md, verified live 2026-10-04):
+#   - PreToolUse: `decision` is REQUIRED; "allow" lets the tool proceed.
+#   - PostToolUse/PreInvocation: no required fields; `{}` is a true no-op.
+#   - Stop: `decision` must NOT be "continue", or it blocks the agent from
+#     stopping — omitting it entirely (`{}`) lets the stop proceed.
+_ANTIGRAVITY_REQUIRED_STDOUT: dict[str, str] = {
+    "PreToolUse": '{"decision":"allow"}',
+    "PostToolUse": "{}",
+    "PreInvocation": "{}",
+    "PostInvocation": "{}",
+    "Stop": "{}",
+}
+
+# hooks.json's own event-structure split (see hooks.md's "Supported Event
+# Types" table): PreToolUse/PostToolUse are tool-scoped and need a
+# matcher, wrapped in a {"matcher", "hooks": [...]} group; the other three
+# are flat lists of handler objects with no matcher at all.
+_ANTIGRAVITY_GROUPED_EVENTS = frozenset({"PreToolUse", "PostToolUse"})
+
+# The one key Switchboard owns in a project's .agents/hooks.json. Unlike
+# Claude/Codex's embedded-command-substring marker (HOOK_MARKER below),
+# Antigravity's file format already namespaces by top-level key, so this
+# alone is enough to find (and only ever touch) Switchboard's own entry
+# without disturbing any other named hook (e.g. a user's "lint-checker").
+ANTIGRAVITY_HOOK_NAME = "switchboard"
+
+
+def _antigravity_hook_command(event: str) -> str:
+    url = f"http://{HOOK_HOST}:{HOOK_PORT}{HOOK_PATH_PREFIX}{event}"
+    required = _ANTIGRAVITY_REQUIRED_STDOUT[event]
+    # Read stdin once (so the backgrounded-in-spirit curl below can't race
+    # a second read of an already-drained pipe), POST it to the bridge
+    # bounded to 1s same as every other family's hook (_hook_command
+    # above) so a dead bridge can't meaningfully eat into this hook's own
+    # timeout budget, then print the exact JSON this event's contract
+    # requires — see _ANTIGRAVITY_REQUIRED_STDOUT's comment for why this
+    # can never be `>/dev/null`'d away like the other families' hooks.
+    return (
+        f"body=$(cat); curl -s --max-time 1 -X POST {url} "
+        f'-H "X-Switchboard-Slot: $SWITCHBOARD_SLOT" --data-raw "$body" >/dev/null 2>&1 || true; '
+        f"echo '{required}'"
+    )
 
 
 def _group_is_ours(group: dict) -> bool:
@@ -160,9 +211,50 @@ def _install_rewrite_group(spec: HookSpec, path_override: Path | None, dry_run: 
     return "changed"
 
 
+def _install_merge_named_hook(spec: HookSpec, path_override: Path | None, dry_run: bool) -> str:
+    """Antigravity's merge strategy: `path_override` is always a specific
+    slot's `<cwd>/.agents/hooks.json` (there is no sensible global config
+    path for this family — see families/antigravity.py's module
+    docstring), and the only thing ever written is the single
+    ANTIGRAVITY_HOOK_NAME key, built fresh from `spec` each call. Any
+    other named hook in the file (a user's own, or a plugin's) is left
+    completely alone, same spirit as _install_merge_by_marker's "foreign
+    groups" but keyed by name instead of by command substring. See
+    _install_merge_by_marker's docstring for what the dry_run=True return
+    values mean.
+    """
+    path = path_override or spec.config_path
+    settings, error = _load_json(path)
+    if error is not None:
+        print(f"Could not parse {path}: {error}", file=sys.stderr)
+        return "failed"
+    settings = settings or {}
+    desired: dict[str, list[dict]] = {}
+    for event in spec.events:
+        handler = {"type": "command", "command": _antigravity_hook_command(event)}
+        if event in _ANTIGRAVITY_GROUPED_EVENTS:
+            matcher = spec.matchers.get(event) or "*"
+            desired[event] = [{"matcher": matcher, "hooks": [handler]}]
+        else:
+            desired[event] = [handler]
+    existing = settings.get(ANTIGRAVITY_HOOK_NAME)
+    any_ours_present = existing is not None
+    if existing == desired:
+        return "installed" if dry_run else "unchanged"
+    if dry_run:
+        return "stale marker" if any_ours_present else "missing"
+    settings[ANTIGRAVITY_HOOK_NAME] = desired
+    error = _write_json(path, settings)
+    if error is not None:
+        print(f"Could not write {path}: {error}", file=sys.stderr)
+        return "failed"
+    return "changed"
+
+
 _INSTALLERS = {
     "merge_by_marker": _install_merge_by_marker,
     "rewrite_group": _install_rewrite_group,
+    "merge_named_hook": _install_merge_named_hook,
 }
 
 
@@ -179,6 +271,17 @@ def install_claude_hooks(settings_path: Path | None = None, dry_run: bool = Fals
 
 def install_codex_hooks(hooks_path: Path | None = None, dry_run: bool = False) -> str:
     return _install_family_hooks(CODEX_FAMILY, hooks_path, dry_run)
+
+
+def install_antigravity_hooks(cwd: Path, dry_run: bool = False) -> str:
+    """Unlike install_claude_hooks/install_codex_hooks (one global config
+    file, installed once via `install-hooks` / setup.sh), this has no
+    meaningful no-arg form — Antigravity's hooks.json is project-local
+    (see families/antigravity.py), so `cwd` is required and this is
+    called once per launch, from launcher.build_launch(), not from the
+    `install-hooks` CLI subcommand below.
+    """
+    return _install_family_hooks(ANTIGRAVITY_FAMILY, Path(cwd) / ".agents" / "hooks.json", dry_run)
 
 
 def install_hooks(args=None) -> int:

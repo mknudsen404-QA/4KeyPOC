@@ -23,6 +23,10 @@ class StatusDef:
     busy: bool
     claude_hooks: tuple[str, ...]
     codex_hooks: tuple[str, ...]
+    # Antigravity has only 5 events total (no SessionStart/SessionEnd
+    # analog — see families/antigravity.py), so most rows are empty here;
+    # that's a real, documented gap, not an oversight.
+    antigravity_hooks: tuple[str, ...]
     # color/pulse_ms are None for busy statuses: they use the busy ramp
     # (busyColor()/busyPulsePeriodMs() in led_model.h) instead of a static
     # value.
@@ -30,21 +34,37 @@ class StatusDef:
     pulse_ms: int | None
 
 
-# name          busy   claude_hooks                          codex_hooks                            color      pulse_ms
+# name          busy   claude_hooks                          codex_hooks                            antigravity_hooks            color      pulse_ms
 STATUSES: tuple[StatusDef, ...] = (
-    StatusDef("empty", False, (), (), 0x000000, 0),
-    StatusDef("launched", False, (), (), 0x8C8C8C, 0),
-    StatusDef("idle", False, ("SessionStart",), (), 0x8C8C8C, 0),
-    StatusDef("thinking", True, (), (), None, None),
-    StatusDef("working", True, ("UserPromptSubmit", "PostToolUse"), ("UserPromptSubmit", "PostToolUse"), None, None),
-    StatusDef("waiting", False, (), (), 0xFFFF00, 0),
-    StatusDef("needs_input", False, ("PreToolUse", "Notification"), ("PermissionRequest",), 0xFFFF00, 500),
-    StatusDef("blocked", False, (), (), 0xFF0000, 0),
-    StatusDef("done", False, ("Stop",), ("Stop",), 0x00FF00, 0),
+    StatusDef("empty", False, (), (), (), 0x000000, 0),
+    StatusDef("launched", False, (), (), (), 0x8C8C8C, 0),
+    StatusDef("idle", False, ("SessionStart",), (), (), 0x8C8C8C, 0),
+    StatusDef("thinking", True, (), (), (), None, None),
+    StatusDef(
+        "working",
+        True,
+        ("UserPromptSubmit", "PostToolUse"),
+        ("UserPromptSubmit", "PostToolUse"),
+        ("PreInvocation", "PostToolUse"),
+        None,
+        None,
+    ),
+    StatusDef("waiting", False, (), (), (), 0xFFFF00, 0),
+    StatusDef(
+        "needs_input",
+        False,
+        ("PreToolUse", "Notification"),
+        ("PermissionRequest",),
+        ("PreToolUse",),
+        0xFFFF00,
+        500,
+    ),
+    StatusDef("blocked", False, (), (), (), 0xFF0000, 0),
+    StatusDef("done", False, ("Stop",), ("Stop",), ("Stop",), 0x00FF00, 0),
     # Not a settable status (excluded from STATUS_CHOICES below) — it's the
     # liveness-uncertain override (see reducer.py's unknown_probes) and the
     # firmware's statusFromString() fallback for an unrecognized string.
-    StatusDef("unknown", False, (), (), 0xFF8C00, 3000),
+    StatusDef("unknown", False, (), (), (), 0xFF8C00, 3000),
 )
 
 # SessionEnd always frees the slot regardless of status — not a "this hook
@@ -81,6 +101,17 @@ HOOK_MATCHERS: dict[str, str | None] = {
 
 CODEX_HOOK_EVENTS: tuple[str, ...] = ("UserPromptSubmit", "PermissionRequest", "PostToolUse", "Stop", "SessionEnd")
 
+# Antigravity's PreToolUse fires for every tool call (there's no
+# Claude-style "only this hook subscribes to this one tool" concept at
+# the server level — the matcher is applied client-side in hooks.json
+# instead), so this is the matcher string installed for it: only
+# `ask_question` (Antigravity's interactive-question tool, confirmed via
+# builtin/skills/automation/SKILL.md) actually means needs_input, same
+# restriction as Claude's AskUserQuestion. PostToolUse/PreInvocation/Stop
+# aren't matcher-restricted (they fire for everything, like Claude's own
+# PostToolUse).
+ANTIGRAVITY_ASK_QUESTION_MATCHER = "ask_question"
+
 STATUS_CHOICES: tuple[str, ...] = tuple(s.name for s in STATUSES if s.name != "unknown")
 BUSY_STATUSES: tuple[str, ...] = tuple(s.name for s in STATUSES if s.busy)
 
@@ -89,6 +120,11 @@ CLAUDE_HOOK_STATUS["SessionEnd"] = CLAUDE_SESSION_END_STATUS
 
 CODEX_HOOK_STATUS: dict[str, str] = {hook: s.name for s in STATUSES for hook in s.codex_hooks}
 CODEX_HOOK_STATUS["SessionEnd"] = CODEX_SESSION_END_STATUS
+
+# No ANTIGRAVITY_SESSION_END_STATUS: there's no SessionEnd analog at all
+# (see families/antigravity.py) — a slot's hooks never free it; liveness
+# probing is the only thing that notices the process is gone.
+ANTIGRAVITY_HOOK_STATUS: dict[str, str] = {hook: s.name for s in STATUSES for hook in s.antigravity_hooks}
 
 
 def _pascal_case(name: str) -> str:

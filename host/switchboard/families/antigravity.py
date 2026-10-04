@@ -27,38 +27,57 @@ explicit `--model` with a different supported range would need its own
 clamp table — not attempted here; if that's needed, treat it the way the
 plan's capability matrix treats a real but unverified gap, not a guess.
 
-**No hooks wired yet — a real, scoped gap, not an oversight.**
+**Hooks wired 2026-10-04 — a genuinely different mechanism from
+Claude/Codex's fire-and-forget curl hooks, not a copy of that pattern.**
 `~/.gemini/antigravity-cli/builtin/skills/agy-customizations/docs/hooks.md`
-documents a genuinely different mechanism from Claude/Codex/Gemini's
-fire-and-forget curl hooks:
+(verified live against the installed CLI) documents:
 
 - Hooks live in a project-local `.agents/hooks.json` (the doc's own
-  example), not a single global user config file `hooks_install.py`
-  could merge into once — would need writing/merging a file per slot's
-  working directory instead.
+  example), not a single global user config file — so there's no
+  sensible no-arg "install once" entry point the way `install_claude_hooks`/
+  `install_codex_hooks` have. `hooks_install.py`'s `install_antigravity_hooks`
+  always takes a `cwd` and is called once per launch, from
+  `launcher.build_launch()`, right before a slot's shell command is
+  built — not from the `install-hooks` CLI subcommand.
 - Only 5 events exist (`PreToolUse`, `PostToolUse`, `PreInvocation`,
   `PostInvocation`, `Stop`) — no `SessionStart`, `SessionEnd`, or
-  `UserPromptSubmit` analog. `Stop` (loop terminates) is the closest
-  thing to "turn done," but there's nothing that means "process exited."
+  `UserPromptSubmit` analog. Only 4 are actually installed:
+  `PostInvocation`'s own meaning ("after tool calls finish", distinct
+  from `PostToolUse`) never maps to a state transition this project
+  tracks, so wiring it up would just be status-free noise on every
+  model turn — left out rather than installed-but-ignored.
 - Hooks run **synchronously and block the agent loop**, and each event
-  has its own required JSON stdout contract (e.g. `PreToolUse` must
-  return a `decision` of `allow`/`deny`/`ask`/`force_ask`; `Stop` must
-  omit `decision` or omit `"continue"` to let the agent actually stop).
-  Getting this wrong doesn't just fail to report status, it can stall or
-  mis-gate the agent's own execution loop. Switchboard's existing hook
-  commands are a one-line `curl ... || true` that the CLI never inspects
-  the output of — that pattern does not fit here.
-- This needs a genuinely new `HookSpec.merge_strategy` (a
-  project-local-file writer, not a global-config merger) plus a small
-  wrapper script that posts status non-blockingly and still prints the
-  correct passthrough JSON per event — real, scoped follow-up work, not
-  a quick field add. Tracked here rather than guessed at.
+  has its own required JSON stdout contract (`PreToolUse` must return a
+  `decision` of `allow`/`deny`/`ask`/`force_ask`; `Stop`'s `decision`
+  must NOT be `"continue"`, or it blocks the agent from actually
+  stopping). Getting this wrong doesn't just fail to report status, it
+  can stall or mis-gate the agent's own execution loop — so unlike
+  Claude/Codex's hook command (stdout thrown to `/dev/null`, see
+  `hooks_install.py`'s `_hook_command`), this family's installed command
+  always echoes the exact passthrough JSON each event's contract
+  requires (`_ANTIGRAVITY_REQUIRED_STDOUT`) after posting to the bridge.
+- `PreToolUse` isn't matcher-restricted server-side the way Claude's
+  hook registration is (Claude only *subscribes* to `AskUserQuestion`;
+  Antigravity's `PreToolUse` fires for every tool and the matcher is
+  applied client-side in `hooks.json`). The installed hook only targets
+  `ask_question` (confirmed live as the tool name used for interactive
+  questions — see `builtin/skills/automation/SKILL.md`'s own usage),
+  same restriction Claude applies to its own `AskUserQuestion`, for the
+  same reason: every other tool's `PreToolUse` would be noise, not a
+  status change.
 
-`hook_spec()` returns `None` until that's built, same honest pattern as
-`GenericProfile` (no hooks claimed) — see docs/design/family-capability-matrix.md's
-Kimi entry for the precedent (richest hook vocabulary of its day, still
-correctly scoped to launch-only until its own mechanical gap — there, a
-TOML merge strategy — was actually closed).
+`status_table.py`'s `STATUSES` carries `antigravity_hooks` per row the
+same way it already carries `claude_hooks`/`codex_hooks` — this family
+reuses the exact same status vocabulary (`working`, `needs_input`,
+`done`), not a parallel one.
+
+**What's still a real, scoped gap, not an oversight:**
+- No session-exit signal at all (see "Session-end signal" below) — a
+  slot never auto-frees via hook; liveness probing is the only thing
+  that notices the process is gone.
+- Not yet run live end-to-end against an actual `agy` session (the
+  Claude/Codex hook paths were verified live before being marked
+  `hooks=True`; this one hasn't been, see `capabilities()`'s comment).
 
 Voice: no native voice/dictation surface found in `agy --help` (the
 `mic-serve` subcommand serves *this* machine's microphone to a CLI on
@@ -79,12 +98,21 @@ process is gone.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from switchboard.families.base import Capabilities, Detection, HookSpec, VoiceSpec, detect_on_path
+from switchboard.status_table import ANTIGRAVITY_ASK_QUESTION_MATCHER, ANTIGRAVITY_HOOK_STATUS
 
 NAME = "antigravity"
 DISPLAY_NAME = "Antigravity"
 EXECUTABLES = ("agy",)
 KNOWN_PATHS: tuple[str, ...] = ()
+
+# The 4 events actually installed — PostInvocation is deliberately left
+# out, see module docstring. matchers=None means "fires for everything";
+# PreToolUse is the one exception (see module docstring + status_table's
+# ANTIGRAVITY_ASK_QUESTION_MATCHER).
+ANTIGRAVITY_HOOK_EVENTS: tuple[str, ...] = ("PreToolUse", "PostToolUse", "PreInvocation", "Stop")
 
 # The default model (`gemini-3.8-flash`, used when a slot's args don't
 # override --model) only accepts these three — confirmed live. xhigh/max
@@ -108,14 +136,24 @@ class AntigravityProfile:
         value = effort if effort in ANTIGRAVITY_EFFORT_VALUES else "medium"
         return ["--effort", value]
 
-    def hook_spec(self) -> HookSpec | None:
-        # Not implemented yet — see module docstring for exactly why this
-        # isn't a quick field add (project-local file, blocking per-event
-        # JSON contract, no SessionStart/SessionEnd analog).
-        return None
+    def hook_spec(self) -> HookSpec:
+        # config_path is a placeholder: this family has no meaningful
+        # global config location (see module docstring), so the real
+        # path is always supplied by the caller as path_override —
+        # launcher.build_launch() passes the launching slot's own cwd,
+        # via hooks_install.install_antigravity_hooks(cwd). merge_strategy
+        # "merge_named_hook" is what actually knows how to use that.
+        return HookSpec(
+            config_path=Path(".agents/hooks.json"),
+            events=ANTIGRAVITY_HOOK_EVENTS,
+            matchers={"PreToolUse": ANTIGRAVITY_ASK_QUESTION_MATCHER},
+            event_status=dict(ANTIGRAVITY_HOOK_STATUS),
+            session_end_status=None,
+            merge_strategy="merge_named_hook",
+        )
 
     def hook_status_for(self, event: str) -> str | None:
-        return None
+        return ANTIGRAVITY_HOOK_STATUS.get(event)
 
     def default_voice(self) -> VoiceSpec:
         # No native voice surface found — same family-agnostic hotkey
@@ -130,9 +168,13 @@ class AntigravityProfile:
     def capabilities(self) -> Capabilities:
         # tier is live, not hardcoded, same pattern as Codex: effort
         # always works (clamped above so it can't error), voice depends
-        # on whether this machine actually has a usable PTT provider, and
-        # hooks are a real, tracked gap rather than silently claimed.
+        # on whether this machine actually has a usable PTT provider.
+        # hooks=True is the mechanism being implemented (same meaning as
+        # Claude/Codex's hardcoded hooks=True), not a live-session claim —
+        # see module docstring's "still a real, scoped gap" section for
+        # what hasn't been run live yet.
         from switchboard.voice import registry as voice_registry
 
         voice_available = voice_registry.get(self.default_voice().provider).available().available
-        return Capabilities(hooks=False, effort=True, voice=voice_available, tier="status")
+        tier = "full" if voice_available else "status"
+        return Capabilities(hooks=True, effort=True, voice=voice_available, tier=tier)

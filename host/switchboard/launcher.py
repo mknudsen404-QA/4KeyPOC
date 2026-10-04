@@ -200,6 +200,27 @@ def config_command(args) -> int:
     return 0
 
 
+def _install_project_local_hooks(family: str, cwd: str) -> None:
+    """Claude/Codex's hooks live in one global config file, installed
+    once via the `install-hooks` CLI subcommand / setup.sh — launching a
+    slot never needs to touch them. A family whose HookSpec.merge_strategy
+    is "merge_named_hook" (currently just Antigravity — see
+    families/antigravity.py) is different: its hooks.json is project-local,
+    so it has to be (re)installed into *this* slot's cwd on every launch,
+    here, right before the shell command is built. Never fatal: a slot
+    that can't get its hooks installed should still launch and work, just
+    without status reporting, same as any other non-fatal setup hiccup.
+    """
+    spec = family_registry.get(family).hook_spec()
+    if spec is None or spec.merge_strategy != "merge_named_hook":
+        return
+    from switchboard.hooks_install import install_antigravity_hooks
+
+    result = install_antigravity_hooks(Path(cwd))
+    if result == "failed":
+        print(f"Warning: could not install {family} hooks into {cwd}/.agents/hooks.json", file=sys.stderr)
+
+
 @dataclass
 class LaunchPlan:
     record_fields: dict  # kwargs for model.slot_record (minus `now`)
@@ -234,6 +255,7 @@ def build_launch(
                 file=sys.stderr,
             )
     cwd = validate_or_create_cwd(resolve_agent_cwd(agent, config))
+    _install_project_local_hooks(family, cwd)
     effort_value = normalize_effort(effort if effort is not None else agent.get("effort"))
     base_command = resolve_command(command_field)
     command = command_with_effort(base_command, family, effort_value)

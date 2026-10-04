@@ -74,13 +74,22 @@ def test_antigravity_effort_args_clamps_to_the_default_models_ceiling():
     assert profile.effort_args("not-a-real-value") == ["--effort", "medium"]
 
 
-def test_antigravity_hook_spec_is_none():
-    """No hooks wired yet — a real, documented gap (see the module
-    docstring), not an oversight. Must not claim hooks work."""
+def test_antigravity_hook_spec():
+    """Hooks are wired (2026-10-04): a project-local merge strategy,
+    4 of the 5 real events (PostInvocation deliberately left out — see
+    module docstring), Stop maps to done same as every other family."""
     profile = AntigravityProfile()
-    assert profile.hook_spec() is None
-    assert profile.hook_status_for("Stop") is None
-    assert profile.capabilities().hooks is False
+    spec = profile.hook_spec()
+    assert spec is not None
+    assert spec.merge_strategy == "merge_named_hook"
+    assert set(spec.events) == {"PreToolUse", "PostToolUse", "PreInvocation", "Stop"}
+    assert "PostInvocation" not in spec.events
+    assert spec.matchers["PreToolUse"] == "ask_question"
+    assert spec.session_end_status is None
+    assert profile.hook_status_for("Stop") == "done"
+    assert profile.hook_status_for("PreToolUse") == "needs_input"
+    assert profile.hook_status_for("PostInvocation") is None
+    assert profile.capabilities().hooks is True
 
 
 def test_generic_profile_has_every_capability_false():
@@ -129,14 +138,15 @@ def test_capabilities_tiers(monkeypatch):
     assert ClaudeProfile().capabilities().tier == "full"
     assert CodexProfile().capabilities().tier == "status"
     assert GenericProfile("kimi").capabilities().tier == "launch_only"
-    # Antigravity has no hooks at all yet, so it can never reach "full" —
-    # it stays "status" even with voice available, unlike Codex.
+    # Antigravity's tier now tracks voice availability the same way
+    # Codex's does (hooks are wired as of 2026-10-04) — "status" only
+    # because this monkeypatch reports no voice provider available.
     assert AntigravityProfile().capabilities().tier == "status"
 
     monkeypatch.setattr(voice_module.registry, "get", lambda name: type("P", (), {"available": lambda self: Availability(True)})())
     assert CodexProfile().capabilities().tier == "full"
     assert CodexProfile().capabilities().voice is True
-    assert AntigravityProfile().capabilities().tier == "status"
+    assert AntigravityProfile().capabilities().tier == "full"
     assert AntigravityProfile().capabilities().voice is True
 
 
