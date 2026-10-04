@@ -476,7 +476,8 @@ def write_project(outdir, name):
         fh.write("\n".join(lines) + "\n")
 
     sym_libs = ["RF_Module", "Interface_Expansion", "Regulator_Linear", "74xGxx",
-                "Connector", "Connector_Generic", "Device", "Switch", "LED", "power"]
+                "Connector", "Connector_Generic", "Device", "Switch", "LED", "power",
+                "Power_Protection"]
     lines = ['(sym_lib_table', '  (version 7)']
     for lib in sym_libs:
         lines.append('  (lib (name "%s")(type "KiCad")'

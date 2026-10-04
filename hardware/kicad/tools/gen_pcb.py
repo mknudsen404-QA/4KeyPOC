@@ -87,6 +87,16 @@ class BoardBuilder(object):
             self.fps[p.ref] = fp
             for pad in fp.Pads():
                 num = pad.GetNumber()
+                if num in p.nc:
+                    # Must win over p.pins, same as gen_sch.py's is_nc check -
+                    # a pin can have both a plausible net name (e.g. the last
+                    # LED's DOUT, still called LEDCH%d) and be explicitly
+                    # unconnected because there's nothing next in the chain.
+                    # Without this the schematic (which does respect nc) and
+                    # the PCB (which didn't) silently disagreed about whether
+                    # that pin was wired - a real drift the "one definition
+                    # drives both generators" design is supposed to prevent.
+                    continue
                 netname = p.pins.get(num)
                 if netname:
                     pad.SetNet(self.net(netname))
@@ -190,7 +200,9 @@ class BoardBuilder(object):
         fp = None
         # NOTE: not a symmetric rectangle. The top-left corner is inside the
         # ESP32 antenna keepout and the left strip is full of parts, so the
-        # upper-left hole sits at x=49 instead. Revisit with the enclosure.
+        # upper-left hole sits at x=51.5 instead. Revisit once an enclosure
+        # exists (hardware/enclosure/ has only the version-badge tile today,
+        # no case model to check this against - see its own README).
         for (x, y) in [(51.5, 4.0), (self.W - 4.0, 4.0),
                        (4.0, self.H - 4.0), (self.W - 4.0, self.H - 4.0)]:
             fp = pcbnew.FootprintLoad(fp_path("MountingHole"),
@@ -336,12 +348,26 @@ class BoardBuilder(object):
         self.track("+3V3", [c3, (c3[0], u3_vout[1])], TRACK)
         self.track("+3V3", [(73.0, c5[1]), c5], TRACK)
         # 3V3 crosses to the left-hand region on the back layer.
-        u1_3v3, c4 = p("U1", "2"), p("C4", "1")
+        u1_3v3, c4, c9 = p("U1", "2"), p("C4", "1"), p("C9", "1")
         self.via("+3V3", 73.0, 25.5)
         self.via("+3V3", 13.0, 25.5)
         self.track("+3V3", [(73.0, 25.5), (13.0, 25.5)], TRACK, pcbnew.B_Cu)
         self.track("+3V3", [(13.0, 25.5), (13.0, u1_3v3[1]), u1_3v3], TRACK)
         self.track("+3V3", [(13.0, u1_3v3[1]), (c4[0], u1_3v3[1]), c4], TRACK)
+        # C9: a second bulk cap on U1's own +3V3 net - not literally at the
+        # pin (the whole left margin, x<20, is already packed solid: U1's
+        # own body, C4, SW_BOOT, C7, U4, C6, SW_RST, R7 and their traces -
+        # every spot tried there either crossed LED_GPIO's run through that
+        # corner or sat on top of U1's own closely-pitched pin column at
+        # x=15.25). Placed in the open bay right of U1 instead, well short
+        # of C3's 60mm-away bulk cap, by tapping straight into the existing
+        # (73.0,25.5)-(13.0,25.5) B.Cu +3V3 trunk at this x - a plain T-tap
+        # onto copper already proven net-clean, not a new crossing. GND
+        # side needs no explicit track, same as every other decoupling cap
+        # here - it reaches the pour directly.
+        c9_via = (c9[0], 25.5)
+        self.via("+3V3", *c9_via)
+        self.track("+3V3", [c9_via, c9], TRACK)
 
         # --- I2C, on the back layer ----------------------------------------
         scl_u1, sda_u1 = p("U1", "12"), p("U1", "17")

@@ -168,6 +168,25 @@ def build(tier):
         sch=(55, 130), pcb=(70.0, 3.0), rot=180, nc=["A8", "B8"],
         desc="Power + native USB serial. Sink only, 5.1k CC pulldowns."))
 
+    # --- D_ESD  USB ESD protection -----------------------------------------
+    # Shunt TVS array across the same USB_DP/USB_DM nets J1 and U1 already
+    # share (ESD protection doesn't need to sit "in line" - clamping to
+    # GND/VBUS from anywhere on the net works, which is why this needs no
+    # net renaming on either side). Pinout confirmed against the symbol
+    # KiCad actually ships (Power_Protection.kicad_sym's USBLC6-2P6, which
+    # USBLC6-2SC6 extends): 1/6 = I/O1, 3/4 = I/O2, 2 = GND, 5 = VBUS.
+    # Left unrouted like the rest of the differential pair (see the
+    # README's "a person's eye, not a script" note) - this only adds the
+    # part and its net assignments so it exists in the schematic/BOM.
+    parts.append(Part(
+        "D_ESD", "Power_Protection:USBLC6-2SC6", "USBLC6-2SC6",
+        "Package_TO_SOT_SMD:SOT-23-6",
+        {"1": "USB_DM", "6": "USB_DM", "3": "USB_DP", "4": "USB_DP",
+         "2": "GND", "5": "+5V"},
+        sch=(55, 90), pcb=(36.0, 24.0), rot=0,
+        desc="Very-low-capacitance ESD protection, shunted across the "
+             "existing USB_DP/USB_DM/+5V/GND nets right at the connector."))
+
     # --- J2  spare-GPIO expansion header ----------------------------------
     parts.append(Part(
         "J2", "Connector_Generic:Conn_02x06_Odd_Even", "SPARE / DEBUG",
@@ -198,6 +217,15 @@ def build(tier):
         ("C6", "1u",    C0603, {"1": "~RESET", "2": "GND"}, (140, 300), (6.0, 36.0)),
         ("C7", "100n",  C0603, {"1": "+5V", "2": "GND"},  (160, 300), (9.5, 30.0)),
         ("C8", "22u",   C0805, {"1": "+5V", "2": "GND"},  (180, 300), (79.0, 16.0)),
+        # Second bulk cap on U1's own +3V3 net (pad 2 is at ~(15.25, 23.9),
+        # local offset (-8.75,-3.99) from U1's placement) - C4's 100n alone
+        # was ~37mm from there with nothing bulk any closer (C3's 10u sits
+        # all the way at (60, 19)), unlike Espressif's own WROOM-1
+        # reference design, which puts a 22u/0.1u pair right at the
+        # module's supply pin. Not placed literally at the pin - the whole
+        # left margin is already packed solid; see gen_pcb.py's route_strip
+        # comment on C9 for exactly why and where this landed instead.
+        ("C9", "10u",   C0805, {"1": "+3V3", "2": "GND"}, (200, 300), (41.0, 33.0)),
     ]
     for row in passives:
         ref, val, fp, pins, sch, pcb = row[:6]

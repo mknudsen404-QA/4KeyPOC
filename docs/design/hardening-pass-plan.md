@@ -312,6 +312,45 @@ and here's where to configure it" surface:
 
 ## Workstream E — 4key board: close the fab-blocking punch list
 
+**Status (2026-10-03): the two biggest open questions resolved (safely),
+three real generator bugs found and fixed, one real gap surfaced that still
+needs a human decision.** Full detail lives in `hardware/kicad/README.md`'s
+"ERC/DRC status" and "Symbols and footprints" sections now — this is the
+summary.
+
+Verified against primary-source datasheets (not search-engine summaries,
+which were caught being wrong twice along the way — once claiming XL9555's
+SDA/SCL were swapped, once claiming two ESP32-S3-WROOM-1 GND/thermal pins
+were GPIOs): all 41 ESP32-S3-WROOM-1 pins and all 24 XL9555 pins in
+`boarddef.py` match their real datasheets exactly. An independent Opus
+review of the whole design, run in parallel, confirmed this and caught
+three things a pinout check alone couldn't:
+
+1. `gen_pcb.py` ignored `p.nc` entirely (`gen_sch.py` didn't) — real
+   schematic/PCB drift, fixed.
+2. No bulk cap at U1's own +3V3 pin — added (C9), routed, DRC-clean on all
+   three tiers.
+3. No USB ESD protection — added (a USBLC6-2SC6 TVS array, D_ESD), pinout
+   confirmed against the actual symbol KiCad ships, left unrouted like the
+   rest of the differential pair.
+
+All three tiers regenerated and re-verified: 0 DRC violations, 0 ERC
+violations (up from 34/38/42 unconnected items to 39/43/47 — expected,
+from D_ESD's new unrouted nets, nothing previously-routed changed).
+
+One real gap surfaced, not yet closed: the LED footprint/part pairing
+(`boarddef.py` uses the plain SK6812MINI, not the "-E" variant) is
+internally consistent, but the current-budget math upstream of this
+workstream was computed against the wrong datasheet (the "-E" one) — the
+plain part's own datasheet doesn't list a per-channel current figure the
+same way. Needs the exact SKU locked down before ordering, not a code fix.
+Also confirmed: no enclosure/case file exists in this repo at all (only a
+version-badge tile), so the mounting-hole-vs-case punch list item is
+currently impossible to do, not just undone. And the trademark gut-check
+elevated "THE SWITCH" specifically as the one to worry about (same product
+class as Nintendo's Switch mark) — treat all three tier nicknames as
+internal codenames until a real search is done.
+
 `hardware/kicad/4key/README.md`'s "Before you send these to a fab" list is
 already the right checklist — this workstream is executing it, in the
 order that front-loads the highest-cost-to-get-wrong items first (matches
