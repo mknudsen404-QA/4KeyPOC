@@ -1,8 +1,12 @@
 # Plug-and-Play Installer — Project Plan
 
-**Status:** scoped, not started. This is a future project, separate from the
-working 4-key NeoKey proof of concept and the `host/` bridge, both of which
-already work today via `host/setup.sh`.
+**Status:** merged into the real firmware (2026-10-04). The spike below
+was validated on real hardware, then its composite CDC+MSC code was
+merged directly into `firmware/neokey/neokey.ino` (see that file and its
+README's "Plug-and-play installer drive" section) — the standalone
+`firmware/msc_cdc_spike/` sketch is kept only as the validation record
+referenced throughout this doc, not as something to flash separately
+going forward.
 
 ## The goal
 

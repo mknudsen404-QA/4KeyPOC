@@ -12,12 +12,47 @@ slot is currently selected.
 
 - Board: `esp32:esp32:esp32s3`, with **USB CDC On Boot = Enabled**
   (`CDCOnBoot=cdc`) — this board has no separate USB-UART chip, so this is
-  required for the serial monitor to work at all.
+  required for the serial monitor to work at all — **and USB Mode =
+  USB-OTG (TinyUSB)** (`USBMode=default`), required for the composite
+  CDC+MSC installer drive below. A build with the wrong USB Mode fails
+  with a `#error` rather than silently shipping a board that can't
+  advertise the drive.
+  ```
+  arduino-cli compile --fqbn esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc firmware/neokey
+  ```
 - Wiring: NeoKey `C` (SCL) -> GPIO8, NeoKey `D` (SDA) -> GPIO9, NeoKey VIN ->
   3.3V, NeoKey's unlabeled pin (GND) -> GND.
 - **The NeoKey's header pins must be soldered**, not just friction-fit into a
   breadboard — an unsoldered/poorly-seated connection here reads as "no I2C
   device found" and is easy to mistake for a wiring or code problem.
+
+## Plug-and-play installer drive
+
+As of 2026-10-04 this firmware also enumerates a small read-only USB
+drive ("SWITCHBD") alongside its normal serial port — merged in from the
+validated `firmware/msc_cdc_spike/` spike (see
+`docs/design/plug-and-play-installer-plan.md`). On a fresh Mac with
+nothing installed, the drive appears in Finder containing
+`Install Switchboard.command`; double-clicking it clones the (public)
+repo and runs `host/setup.sh`, or shows an "already installed" dialog if
+it finds the bridge's LaunchAgent already present. This is what makes
+handing a board to someone else (a friend, a coworker) close to actual
+plug-and-play instead of "open a terminal and paste two commands."
+
+The drive's one file is a compiled-in FAT image (`installer_disk.h`),
+generated offline, not read from flash at runtime. After editing
+`Install Switchboard.command`, regenerate it with:
+
+```sh
+cd firmware/neokey
+python3 gen_fat.py "Install Switchboard.command"
+```
+
+This also writes `fat_image.bin` next to it, which you can sanity-check
+locally before ever touching hardware — see
+`firmware/msc_cdc_spike/README.md`'s "Regenerating the disk image"
+section for the `hdiutil`/`diskutil` mount steps (identical process,
+only the source `.ino`/output path differ).
 
 ## What you should see on the serial port at boot
 

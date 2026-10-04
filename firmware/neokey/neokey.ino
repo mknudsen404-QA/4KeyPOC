@@ -5,6 +5,22 @@
 #include "seesaw_neopixel.h"
 #include "led_model.h"
 
+// Composite USB (CDC, the runtime protocol above, + MSC, a tiny
+// read-only installer drive) — see
+// docs/design/plug-and-play-installer-plan.md. Merged in from the
+// validated firmware/msc_cdc_spike/ spike (2026-09-12); this #error
+// guard is carried over from that spike so a board built with the wrong
+// USB Mode fails the build loudly instead of silently shipping a board
+// that can't advertise the installer drive.
+#ifndef ARDUINO_USB_MODE
+#error This sketch requires an ESP32-S3 (or other SoC with native USB)
+#elif ARDUINO_USB_MODE == 1
+#error Set "USB Mode" to "USB-OTG (TinyUSB)", not "Hardware CDC and JTAG"
+#endif
+#include "USB.h"
+#include "USBMSC.h"
+#include "installer_disk.h"
+
 #define FIRMWARE_NAME "neokey"
 #define FIRMWARE_BUILD __DATE__ " " __TIME__
 
@@ -20,6 +36,29 @@
 const uint8_t AGENT_SLOTS[AGENT_KEY_COUNT] = {1, 2, 3};
 
 Adafruit_NeoKey_1x4 neokey;
+
+// --- Installer drive (MSC) --------------------------------------------
+// Read-only virtual drive backed by a compiled-in FAT image (see
+// gen_fat.py / installer_disk.h) carrying one file: a double-clickable
+// installer stub. Coexists with the CDC serial protocol below — both
+// ride the same native USB peripheral, enumerated together by the one
+// USB.begin() call in setup().
+USBMSC MSC;
+
+static int32_t mscOnRead(uint32_t lba, uint32_t offset, void *buffer, uint32_t bufsize) {
+  memcpy(buffer, msc_disk_image + (lba * DISK_SECTOR_SIZE) + offset, bufsize);
+  return bufsize;
+}
+
+static int32_t mscOnWrite(uint32_t lba, uint32_t offset, uint8_t *buffer, uint32_t bufsize) {
+  // Read-only volume: silently accept and discard writes (some OSes probe
+  // writability during mount). Never persists anything.
+  return bufsize;
+}
+
+static bool mscOnStartStop(uint8_t power_condition, bool start, bool load_eject) {
+  return true;
+}
 
 int selectedSlot = 0;  // 0 = none selected yet
 Status slotStatus[AGENT_KEY_COUNT] = {Status::Empty, Status::Empty, Status::Empty};
@@ -128,6 +167,24 @@ void pollIncomingSerial() {
 
 void setup() {
   Serial.begin(115200);
+
+  // Enumerate the installer drive before the seesaw init below, which can
+  // block indefinitely in its retry loop if the NeoKey chip doesn't
+  // answer — the installer drive should still appear even then, since a
+  // stuck seesaw chip is exactly the kind of hardware hiccup this
+  // shouldn't be coupled to. One USB.begin() call enumerates both this
+  // (MSC) and the Serial/CDC above together.
+  MSC.vendorID("Switchbd");
+  MSC.productID("Installer");
+  MSC.productRevision("1.0");
+  MSC.onRead(mscOnRead);
+  MSC.onWrite(mscOnWrite);
+  MSC.onStartStop(mscOnStartStop);
+  MSC.mediaPresent(true);
+  MSC.isWritable(false);
+  MSC.begin(DISK_SECTOR_COUNT, DISK_SECTOR_SIZE);
+  USB.begin();
+
   delay(2000);
 
   sendBootEvent("start", 0);
