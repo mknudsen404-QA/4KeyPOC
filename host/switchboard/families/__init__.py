@@ -61,7 +61,13 @@ class FamilyRegistry:
         return profile.name if profile else "generic"
 
     def known_paths_map(self) -> dict[str, list[str]]:
-        return {name: list(profile.known_paths) for name, profile in self._by_name.items() if profile.known_paths}
+        # Launch resolution looks up executable names ("agy"), which can
+        # differ from the family name ("antigravity").
+        return {
+            executable: list(profile.known_paths)
+            for executable, profile in self._by_executable.items()
+            if profile.known_paths
+        }
 
 
 registry = FamilyRegistry((ClaudeProfile(), CodexProfile(), AntigravityProfile()))

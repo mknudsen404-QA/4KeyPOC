@@ -23,6 +23,20 @@ PLIST = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
 LOG_DIR = Path.home() / "Library/Logs/Switchboard"
 
 
+def bridge_path() -> str:
+    # Settings/Update apps run through AppleScript with a minimal PATH.
+    # Preserve custom paths, then add CLI install directories explicitly
+    # so re-running setup from the Update app cannot lose them.
+    directories = os.environ.get("PATH", "").split(os.pathsep)
+    directories.extend([
+        str(Path.home() / ".local/bin"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+    ])
+    return os.pathsep.join(dict.fromkeys(path for path in directories if path))
+
+
 def build_plist(args: argparse.Namespace) -> dict:
     program_arguments = [
         sys.executable,
@@ -56,7 +70,7 @@ def build_plist(args: argparse.Namespace) -> dict:
         "StandardOutPath": str(LOG_DIR / "bridge.out.log"),
         "StandardErrorPath": str(LOG_DIR / "bridge.err.log"),
         "EnvironmentVariables": {
-            "PATH": os.environ.get("PATH", "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"),
+            "PATH": bridge_path(),
             "SWITCHBOARD_MANAGED_LOGS": "1",
         },
     }

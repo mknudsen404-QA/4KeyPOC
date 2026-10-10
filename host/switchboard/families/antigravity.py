@@ -106,7 +106,11 @@ from switchboard.status_table import ANTIGRAVITY_ASK_QUESTION_MATCHER, ANTIGRAVI
 NAME = "antigravity"
 DISPLAY_NAME = "Antigravity"
 EXECUTABLES = ("agy",)
-KNOWN_PATHS: tuple[str, ...] = ()
+KNOWN_PATHS = (
+    "~/.local/bin/agy",
+    "/opt/homebrew/bin/agy",
+    "/usr/local/bin/agy",
+)
 
 # The 4 events actually installed — PostInvocation is deliberately left
 # out, see module docstring. matchers=None means "fires for everything";

@@ -37,7 +37,12 @@ from switchboard.status_table import CODEX_HOOK_EVENTS, CODEX_HOOK_STATUS, CODEX
 NAME = "codex"
 DISPLAY_NAME = "Codex"
 EXECUTABLES = ("codex",)
-KNOWN_PATHS = ("/Applications/ChatGPT.app/Contents/Resources/codex",)
+KNOWN_PATHS = (
+    "~/.local/bin/codex",
+    "/opt/homebrew/bin/codex",
+    "/usr/local/bin/codex",
+    "/Applications/ChatGPT.app/Contents/Resources/codex",
+)
 
 # All five accepted live — see the module docstring.
 CODEX_EFFORT_VALUES = {"low", "medium", "high", "xhigh", "max"}

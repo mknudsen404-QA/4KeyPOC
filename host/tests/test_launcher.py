@@ -55,6 +55,24 @@ def test_resolve_command_missing_raises():
         launcher.resolve_command("definitely-not-a-real-binary-xyz")
 
 
+@pytest.mark.parametrize("family, executable", [("codex", "codex"), ("antigravity", "agy")])
+def test_detection_and_launch_find_install_outside_login_agent_path(monkeypatch, tmp_path, family, executable):
+    from switchboard.families import registry
+
+    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+    binary = tmp_path / "installed bin" / executable
+    binary.parent.mkdir()
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    profile = registry.get(family)
+    monkeypatch.setattr(profile, "known_paths", (str(binary),))
+    monkeypatch.setattr(launcher, "KNOWN_COMMAND_PATHS", registry.known_paths_map())
+    assert profile.detect().path == str(binary)
+    assert shlex.split(launcher.resolve_command(f'{executable} --model "test model"')) == [
+        str(binary), "--model", "test model",
+    ]
+
+
 def test_launcher_build_launch_golden(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / "Documents" / "foo").mkdir(parents=True)

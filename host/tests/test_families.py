@@ -159,8 +159,21 @@ def test_slash_commands_gives_key_intents_a_home():
 
 def test_known_paths_map_only_lists_families_with_paths():
     paths = registry.known_paths_map()
-    assert set(paths) == {"claude", "codex"}
+    assert set(paths) == {"claude", "codex", "agy"}
     assert paths["codex"] == list(CodexProfile().known_paths)
+    assert paths["agy"] == list(AntigravityProfile().known_paths)
+
+
+def test_codex_detects_local_install_with_login_agent_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+    binary = tmp_path / ".local/bin/codex"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    detection = CodexProfile().detect()
+    assert detection.found
+    assert detection.path == str(binary)
 
 
 def test_registry_never_raises_on_arbitrary_name():
