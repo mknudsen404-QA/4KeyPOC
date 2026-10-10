@@ -71,6 +71,17 @@ def _default_log(message: str) -> None:
 # probe-free) reducer.
 _PROBED_EVENTS = ("agent.select", "voice.hold.start", "voice.hold.stop")
 
+# macOS virtual keycode for Return — used only by the double-tap-to-send
+# feature below (_consume_double_tap), independent of whichever voice
+# provider is configured for the slot.
+RETURN_KEYCODE = 36
+
+# How soon after a voice hold release a second hold-start on the same slot
+# counts as a double-tap (send Return) instead of starting a new recording.
+# Timed with clock.monotonic() rather than the integer wall-clock `now`
+# reduce() uses — a window this short doesn't fit in whole seconds.
+DOUBLE_TAP_WINDOW_S = 0.4
+
 
 def _slot_str(slot) -> str | None:
     return None if slot is None else str(slot)
@@ -163,6 +174,11 @@ class Bridge:
         # missed the original send (an interleaved-write hiccup, e.g.).
         self.pending_acks: dict[str, tuple[float, dict, int]] = {}
 
+        # slot_key -> clock.monotonic() of that slot's last voice.hold.stop,
+        # for _consume_double_tap. Bridge-owned (not ReducerState) because
+        # it needs sub-second timing reduce()'s integer `now` can't give it.
+        self._last_voice_stop_mono: dict[str, float] = {}
+
     def submit(self, event: Event) -> None:
         """Thread-safe; callable from any thread."""
         self._queue.put(event)
@@ -179,8 +195,12 @@ class Bridge:
     def step(self, event: Event) -> None:
         """Process ONE event on the calling thread. The only place that
         touches the registry inside this process."""
+        if isinstance(event, BoardEvent) and event.name == "voice.hold.start" and self._consume_double_tap(event):
+            return
         event = self._resolve_probes(event)
         self._trace_event_in(event)
+        if isinstance(event, BoardEvent) and event.name == "voice.hold.stop":
+            self._record_voice_stop(event)
         if isinstance(event, BoardEvent) and event.name == "agent.update.ack":
             slot = event.payload.get("slot")
             if slot is not None:
@@ -372,6 +392,36 @@ class Bridge:
                 self.terminal.close(effect.tty)
         elif isinstance(effect, Log):
             self._log(effect.message)
+
+    def _voice_slot_key(self, event: BoardEvent) -> str | None:
+        slot = event.payload.get("slot") or self.state.selected_slot
+        return str(slot) if slot else None
+
+    def _record_voice_stop(self, event: BoardEvent) -> None:
+        slot_key = self._voice_slot_key(event)
+        if slot_key is not None:
+            self._last_voice_stop_mono[slot_key] = self.clock.monotonic()
+
+    def _consume_double_tap(self, event: BoardEvent) -> bool:
+        """True if this voice.hold.start is a rapid second tap following a
+        release on the same slot: tap mic, let go, tap again within
+        DOUBLE_TAP_WINDOW_S, instead of holding again to re-record. Treated
+        as "send" (a Return keypress into the focused terminal) rather than
+        starting a new voice hold — handled here, before reduce() ever
+        sees the event, so it never starts a hold it would have to undo."""
+        slot_key = self._voice_slot_key(event)
+        if slot_key is None:
+            return False
+        last_stop = self._last_voice_stop_mono.get(slot_key)
+        if last_stop is None or self.clock.monotonic() - last_stop > DOUBLE_TAP_WINDOW_S:
+            return False
+        del self._last_voice_stop_mono[slot_key]
+        self.trace.write({"kind": "effect", "type": "SendReturn", "slot": slot_key})
+        self._log(f"Voice double-tap on agent {slot_key}: sending Return instead of starting a new hold")
+        pid = self.terminal.terminal_pid()
+        self.key_injector.hold(pid, RETURN_KEYCODE)
+        self.key_injector.release(pid, RETURN_KEYCODE)
+        return True
 
     def _apply_voice_key(self, effect: VoiceKey) -> None:
         from switchboard.voice import registry as voice_registry

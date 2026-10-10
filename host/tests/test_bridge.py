@@ -309,6 +309,33 @@ def test_voice_hold_stop_releases_key(tmp_path):
     assert key_injector.released == [(1234, 49)]
 
 
+def test_voice_hold_double_tap_sends_return_instead_of_holding_again(tmp_path):
+    clock = FakeClock()
+    bridge, registry, device, terminal, prober, clock, key_injector = make_bridge(tmp_path, clock=clock)
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "terminal_tty": "/dev/ttys001", "voice": {"provider": "claude_native"}}}})
+
+    bridge.step(BoardEvent("voice.hold.start", {"slot": 1}))
+    bridge.step(BoardEvent("voice.hold.stop", {"slot": 1}))
+    clock.advance(0.1)  # well inside DOUBLE_TAP_WINDOW_S
+    bridge.step(BoardEvent("voice.hold.start", {"slot": 1}))
+
+    assert key_injector.held == [(1234, 49), (1234, 36)]  # the first hold (Space), then Return — no second Space hold
+    assert key_injector.released == [(1234, 49), (1234, 36)]
+
+
+def test_voice_hold_second_tap_outside_window_starts_a_new_hold(tmp_path):
+    clock = FakeClock()
+    bridge, registry, device, terminal, prober, clock, key_injector = make_bridge(tmp_path, clock=clock)
+    registry.save({"version": 1, "slots": {"1": {"slot": 1, "name": "A", "family": "claude", "terminal_tty": "/dev/ttys001", "voice": {"provider": "claude_native"}}}})
+
+    bridge.step(BoardEvent("voice.hold.start", {"slot": 1}))
+    bridge.step(BoardEvent("voice.hold.stop", {"slot": 1}))
+    clock.advance(1.0)  # outside DOUBLE_TAP_WINDOW_S
+    bridge.step(BoardEvent("voice.hold.start", {"slot": 1}))
+
+    assert key_injector.held == [(1234, 49), (1234, 49)]  # both are ordinary Space holds, no Return
+
+
 def test_startup_sync_sends_led_config_when_settings_path_given(tmp_path, monkeypatch):
     from switchboard.settings import SlotSettingsService, empty_document
 
