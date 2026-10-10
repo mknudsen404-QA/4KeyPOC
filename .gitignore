@@ -22,6 +22,11 @@ host/agent_registry.json.ui_token
 host/agents.json
 host/agents.json.bak
 
+# Antigravity's own per-checkout hooks config, written by
+# hooks_install.py's merge_named_hook installer on first launch of an
+# antigravity-family slot — generated/local, like agents.json above.
+.agents/
+
 .DS_Store
 
 # KiCad generator bytecode
