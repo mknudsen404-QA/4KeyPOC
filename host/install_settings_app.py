@@ -23,6 +23,7 @@ HOST_DIR = Path(__file__).resolve().parent
 BRIDGE = HOST_DIR / "switchboard_bridge.py"
 PYTHON = HOST_DIR / ".venv" / "bin" / "python3"
 APP_PATH = Path.home() / "Applications" / "Switchboard Settings.app"
+ICON_PATH = HOST_DIR / "switchboard" / "icons" / "settings.icns"
 
 
 def build_command() -> str:
@@ -37,7 +38,7 @@ def install(*, dry_run: bool = False) -> int:
         print(f"Would write: {APP_PATH}")
         return 0
 
-    compile_app(script, APP_PATH)
+    compile_app(script, APP_PATH, icon_path=ICON_PATH if ICON_PATH.exists() else None)
     print(f"Installed {APP_PATH}")
     print("Double-click it any time to open the settings page (or drag it to the Dock).")
     return 0

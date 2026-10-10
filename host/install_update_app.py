@@ -26,6 +26,7 @@ HOST_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = HOST_DIR.parent
 SETUP_SH = HOST_DIR / "setup.sh"
 APP_PATH = Path.home() / "Applications" / "Switchboard Update.app"
+ICON_PATH = HOST_DIR / "switchboard" / "icons" / "update.icns"
 
 
 def build_command() -> str:
@@ -49,7 +50,7 @@ def install(*, dry_run: bool = False) -> int:
         print(f"Would write: {APP_PATH}")
         return 0
 
-    compile_app(script, APP_PATH)
+    compile_app(script, APP_PATH, icon_path=ICON_PATH if ICON_PATH.exists() else None)
     print(f"Installed {APP_PATH}")
     print("Double-click it any time to pull the latest version and re-run setup.")
     return 0

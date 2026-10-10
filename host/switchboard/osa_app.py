@@ -43,10 +43,17 @@ def build_script(shell_command: str, *, notification_title: str, success_message
     return "\n".join(lines)
 
 
-def compile_app(script: str, app_path: Path) -> None:
+def compile_app(script: str, app_path: Path, *, icon_path: Path | None = None) -> None:
     """Always rebuilt fresh (paths baked into `script` may have moved
     since the last install, same reasoning as the LaunchAgent plist being
-    regenerated rather than patched)."""
+    regenerated rather than patched).
+
+    `icon_path`, if given, replaces osacompile's generic blank
+    applet icon: osacompile always names it `applet.icns` and already
+    points Info.plist's CFBundleIconFile at "applet" (confirmed by
+    inspecting a compiled app's Info.plist), so swapping that one file
+    is all a custom icon needs — no plist editing.
+    """
     app_path.parent.mkdir(parents=True, exist_ok=True)
     if app_path.exists():
         shutil.rmtree(app_path)
@@ -57,3 +64,10 @@ def compile_app(script: str, app_path: Path) -> None:
         subprocess.run(["osacompile", "-o", str(app_path), script_path], check=True, capture_output=True, text=True)
     finally:
         Path(script_path).unlink(missing_ok=True)
+    if icon_path is not None:
+        shutil.copyfile(icon_path, app_path / "Contents" / "Resources" / "applet.icns")
+        # Finder's icon cache keys off the bundle's mtime; without this
+        # touch a replaced icon can keep showing the old (or blank)
+        # artwork until the next unrelated change to the bundle.
+        (app_path / "Contents" / "Resources" / "applet.icns").touch()
+        subprocess.run(["touch", str(app_path)], check=False)
