@@ -38,6 +38,18 @@ STRIP = 58.0           # electronics strip along the top edge (holds the module,
                        # cluster 12mm more vertical room to spread into.
 BOARD_W = 2 * MARGIN + COLS * PITCH        # 87.2 mm on every tier
 
+# Extra gap between the strip and the first key row, ONLY for tiers with
+# more than one key row. Same fix as STRIP's own 46->58mm growth above,
+# same root cause: on 12key, rows 1-2's KEY nets have to cross row 0's
+# and (for row 2) row 1's own copper on the way to the expander's one
+# tight pin column, and the first fully-routed 12key attempt found real
+# crossings/shortages right in that corridor that neither FreeRouting
+# nor hand-routing could close in the stock 58mm gap. 4key (1 row) and
+# 8key (2 rows) are unaffected - this returns 0 for them, so their own
+# generated output (and the already-fabbed 4key board) is unchanged.
+def row_gap_extra(rows):
+    return 15.0 if rows >= 3 else 0.0
+
 REV = 1                # board revision. BUMP THIS and the tally marks follow.
 BUILD_TAG = "2026-09"  # yyyy-mm stamped into the graffiti tag
 
@@ -49,7 +61,7 @@ TIERS = {
 
 
 def board_h(rows):
-    return STRIP + rows * PITCH + MARGIN
+    return STRIP + row_gap_extra(rows) + rows * PITCH + MARGIN
 
 
 def key_center(idx, rows):
@@ -57,7 +69,7 @@ def key_center(idx, rows):
     col = idx % COLS
     row = idx // COLS
     return (MARGIN + col * PITCH + PITCH / 2.0,
-            STRIP + row * PITCH + PITCH / 2.0)
+            STRIP + row_gap_extra(rows) + row * PITCH + PITCH / 2.0)
 
 
 # ---------------------------------------------------------------------------

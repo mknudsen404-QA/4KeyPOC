@@ -623,6 +623,239 @@ class BoardBuilder(object):
             else:
                 self.track(net, [sw_pad, (sw_pad[0], u2_pad[1]), u2_pad], TRACK)
 
+    # -- the nets route_remaining() above left for every multi-row tier -----
+    #
+    # Generalized for any row count (2026-10-10, 12key pre-fab pass). U1, U2,
+    # R1-R7, C6/C9, J1, J2, D_ESD, SW_RST and SW_BOOT all sit at the SAME
+    # board-local placement on every tier (boarddef.py never moves them per
+    # row count) - only the key switches/LEDs move. So every net ABOVE that
+    # only touches those fixed parts (CC1/CC2, ~RESET/BOOT, EXP_INT, the I2C/
+    # EN pull-up stubs, J2's HDR_* nets, the USB differential pair) can be
+    # routed with the exact same relative geometry route_remaining() used
+    # for 4key, just looked up live via self.pad() instead of baked in as
+    # absolute coordinates - immune to the "strip got taller" staleness that
+    # disabled that function. KEY1..KEYn is the one genuinely new problem
+    # (multi-row fan-in to one tight expander pin column); see
+    # route_key_matrix() below.
+
+    def route_strip_extras(self):
+        p = self.pad
+
+        # --- CC1 / CC2 ---------------------------------------------------
+        j1_cc1, r2_1 = p("J1", "A5"), p("R2", "1")
+        stage = r2_1[1] + 2.0
+        self.track("CC1", [j1_cc1, (j1_cc1[0], stage), (r2_1[0], stage),
+                           r2_1], TRACK)
+        j1_cc2, r3_1 = p("J1", "B5"), p("R3", "1")
+        stage2 = r3_1[1] + 3.0
+        self.track("CC2", [j1_cc2, (j1_cc2[0], stage2), (r3_1[0], stage2),
+                           r3_1], TRACK)
+
+        # --- ~RESET / BOOT -------------------------------------------------
+        # SW_RST/SW_BOOT's footprint splits pin 1 into two physically
+        # separate same-net pads; pin() returns whichever pcbnew iterates
+        # to first, which can coincide for both switches, so each one is
+        # nudged to the OTHER of its two pad instances explicitly, same
+        # fix as the original route_remaining.
+        rst_pads = [pad.GetPosition() for pad in self.fps["SW_RST"].Pads()
+                    if pad.GetNumber() == "1"]
+        boot_pads = [pad.GetPosition() for pad in self.fps["SW_BOOT"].Pads()
+                     if pad.GetNumber() == "1"]
+        rst_x = min(pcbnew.ToMM(pt.x) - ORIGIN[0] for pt in rst_pads)
+        boot_x = max(pcbnew.ToMM(pt.x) - ORIGIN[0] for pt in boot_pads)
+        rst_y, boot_y = p("SW_RST", "1")[1], p("SW_BOOT", "1")[1]
+        u1_rst, u1_boot = p("U1", "3"), p("U1", "27")
+        c6_1, r1_2 = p("C6", "1"), p("R1", "2")
+
+        self.track("~RESET", [(rst_x, rst_y), (rst_x, c6_1[1]), c6_1], TRACK)
+        self.track("~RESET", [c6_1, (r1_2[0], c6_1[1]), r1_2], TRACK)
+        stage_y = c6_1[1] + (u1_rst[1] - c6_1[1]) / 2.0
+        self.track("~RESET", [r1_2, (r1_2[0], stage_y)], TRACK)
+        self.via("~RESET", r1_2[0], stage_y)
+        stage_x = r1_2[0] + 1.0
+        self.track("~RESET", [(r1_2[0], stage_y), (stage_x, stage_y)],
+                   TRACK, pcbnew.B_Cu)
+        self.via("~RESET", stage_x, stage_y)
+        self.track("~RESET", [(stage_x, stage_y), (stage_x, u1_rst[1]),
+                              u1_rst], TRACK)
+
+        boot_jog_x = u1_boot[0] - 2.75
+        boot_jog_y = boot_y - 2.5
+        self.track("BOOT", [(boot_x, boot_y), (boot_x, boot_jog_y),
+                            (boot_jog_x, boot_jog_y),
+                            (boot_jog_x, u1_boot[1]), u1_boot], TRACK)
+
+        # --- R1 pin 1: +3V3, off the existing B.Cu +3V3 trunk at y=25.5 ---
+        r1_1 = p("R1", "1")
+        self.via("+3V3", r1_1[0], 25.5)
+        self.track("+3V3", [(13.0, 25.5), (r1_1[0], 25.5)], TRACK, pcbnew.B_Cu)
+        self.track("+3V3", [(r1_1[0], 25.5), r1_1], TRACK)
+
+        # --- R4/R5/R6 pin 1: +3V3, off route_strip's x=73 spine -----------
+        r4_1, r5_1, r6_1 = p("R4", "1"), p("R5", "1"), p("R6", "1")
+        self.track("+3V3", [r4_1, (73.0, r4_1[1])], TRACK)
+        self.track("+3V3", [r5_1, (73.0, r5_1[1])], TRACK)
+        self.track("+3V3", [r6_1, (73.0, r6_1[1])], TRACK)
+
+        # --- SDA / SCL pull-ups (R4/R5 pin 2): tap route_strip's own ------
+        # B.Cu staging vias for the I2C bus (62.0/66.1 at U2's own pin y).
+        r4_2, r5_2 = p("R4", "2"), p("R5", "2")
+        u2_sda, u2_scl = p("U2", "23"), p("U2", "22")
+        self.via("SDA", *r4_2)
+        self.track("SDA", [r4_2, (62.0, u2_sda[1])], TRACK, pcbnew.B_Cu)
+        self.via("SCL", *r5_2)
+        self.track("SCL", [r5_2, (66.1, u2_scl[1])], TRACK, pcbnew.B_Cu)
+
+        # --- EXP_INT: U1 -> U2 -> R6 pull-up --------------------------------
+        u1_int, u2_int = p("U1", "4"), p("U2", "1")
+        jog_x = u1_int[0] - 5.25
+        self.track("EXP_INT", [u1_int, (jog_x, u1_int[1])], TRACK)
+        self.via("EXP_INT", jog_x, u1_int[1])
+        stage_y2 = u1_int[1] + 2.0
+        self.track("EXP_INT", [(jog_x, u1_int[1]), (jog_x, stage_y2)],
+                   TRACK, pcbnew.B_Cu)
+        self.via("EXP_INT", jog_x, stage_y2)
+        self.track("EXP_INT", [(jog_x, stage_y2), (u2_int[0], stage_y2),
+                               u2_int], TRACK)
+        r6_2 = p("R6", "2")
+        self.track("EXP_INT", [u2_int, (u2_int[0], r6_2[1]), r6_2], TRACK)
+
+        # --- J2 header: HDR_* nets -------------------------------------------
+        hdr = {"HDR_IO38": ("7", "31", -1.5), "HDR_IO6": ("8", "6", -1.5),
+               "HDR_IO7": ("9", "7", 1.5), "HDR_IO10": ("10", "18", 0.0),
+               "HDR_TXD0": ("11", "37", 0.0), "HDR_RXD0": ("12", "36", 1.5)}
+        for net, (j2_pin, u1_pin, dx) in hdr.items():
+            j2_pad, u1_pad = p("J2", j2_pin), p("U1", u1_pin)
+            target_y = u1_pad[1]
+            entry_x = u1_pad[0] + dx
+            self.track(net, [j2_pad, (j2_pad[0], target_y)], TRACK)
+            self.via(net, j2_pad[0], target_y)
+            self.track(net, [(j2_pad[0], target_y), (entry_x, target_y)],
+                       TRACK, pcbnew.B_Cu)
+            self.via(net, entry_x, target_y)
+            self.track(net, [(entry_x, target_y), u1_pad], TRACK)
+
+        # --- USB_DP / USB_DM: J1 -> D_ESD -> U1 -----------------------------
+        dp_j1, dm_j1 = p("J1", "A6"), p("J1", "A7")
+        dp_u1, dm_u1 = p("U1", "14"), p("U1", "13")
+        dp_esd, dm_esd = p("D_ESD", "3"), p("D_ESD", "1")
+        self.track("USB_DP", [dp_j1, (dp_j1[0], dp_esd[1]), dp_esd,
+                              (dp_esd[0], dp_u1[1]), dp_u1], TRACK)
+        self.track("USB_DM", [dm_j1, (dm_j1[0], dm_esd[1]), dm_esd,
+                              (dm_esd[0], dm_u1[1]), dm_u1], TRACK)
+
+    # -- KEY1..KEYn: switch -> expander pin, any row count ------------------
+    #
+    # Row 0 (the row closest to the strip) can run straight on F.Cu exactly
+    # like 4key's own single row - nothing else occupies that space. Every
+    # row below row 0 has to cross row 0's (and, for row 2, row 1's) copper
+    # to reach U2, so those nets dive to B.Cu right at the switch and only
+    # come back to F.Cu at the very end - a different layer from row 0's
+    # whole path, so that crossing is free.
+    #
+    # The remaining risk is rows 1+'s OWN nets crossing EACH OTHER on their
+    # way to the same tight, shared expander pin column. Solved with a
+    # standard channel-routing trick: sort every net feeding one pin column
+    # by its OWN target pin's y, and give it a dedicated lane whose x is in
+    # that SAME sorted order, with each net's vertical run stopping exactly
+    # at its own target y (never overshooting into a neighbour's territory).
+    # Two nets' copper can then only ever be on a potential collision course
+    # if one net's lane sits strictly outside the other's x-span at every y
+    # they share - which sorted-order guarantees for every pair, regardless
+    # of which physical row either one started in.
+
+    def route_key_matrix(self):
+        p = self.pad
+        n = self.n
+        exp_pin_order = ["4", "5", "6", "7", "8", "9", "10", "11",
+                         "13", "14", "15", "16", "17", "18", "19", "20"]
+
+        # Column A = U2 pins 4-11 (KEY1..KEY8 on an 8/12key board), on the
+        # board's west side of the package; column B = pins 13-16+
+        # (KEY9..KEYn), on the east side. Only as many of each as exist.
+        col_a = list(range(min(n, 8)))
+        col_b = list(range(8, n))
+
+        def route_cluster(idxs, side):
+            if not idxs:
+                return
+            pins = [exp_pin_order[i] for i in idxs]
+            targets = [p("U2", pin) for pin in pins]
+            # Sort this cluster by its own target y - the channel-routing
+            # order every lane below is built from. Proof sketch (see the
+            # comment above this method): for two nets with lanes on the
+            # SAME side of the pin column, net X's vertical (spanning
+            # [target_y_X, switch_y_X] at lane_x_X) can only ever cross net
+            # Y's horizontal approach (at y=target_y_Y, spanning from
+            # lane_x_Y to the pin) if lane_x_X sits strictly between
+            # lane_x_Y and the pin AND target_y_Y sits strictly between
+            # target_y_X and switch_y_X. On the WEST side (lane left of
+            # pin, approach pointing right) ordering lane_x the SAME
+            # direction as target_y rules that out for every pair; on the
+            # EAST side (lane right of pin, approach pointing left) it has
+            # to be the OPPOSITE direction instead - the two sides are
+            # mirror images of each other, not the same geometry rotated.
+            order = sorted(range(len(idxs)), key=lambda k: targets[k][1],
+                            reverse=(side == "east"))
+            # Lane x's: a clear corridor between the nearest key-switch
+            # copper and U2's own pin tips, found live (not guessed) so a
+            # future boarddef.py tweak can't quietly make these collide.
+            pin_x = targets[0][0]
+            sw_xs = [p("SW%d" % (i + 1), "1")[0] for i in idxs]
+            if side == "west":
+                inner = max((x for x in sw_xs if x < pin_x), default=pin_x - 10.0)
+                lane_lo, lane_hi = inner + 1.5, pin_x - 0.8
+            else:
+                outer = max(sw_xs)
+                lane_lo, lane_hi = pin_x + 0.8, outer - 1.5
+            span = lane_hi - lane_lo
+            count = len(idxs)
+
+            for rank, k in enumerate(order):
+                i = idxs[k]
+                net = "KEY%d" % (i + 1)
+                row, col = i // boarddef.COLS, i % boarddef.COLS
+                sw = p("SW%d" % (i + 1), "1")
+                u2pin = targets[k]
+                if row == 0:
+                    # Row 0's own geometry (switch positions, U1/R6/the LED
+                    # chain's head trace) is identical on every tier - rows
+                    # never change row 0's own local placement - so this is
+                    # 4key's own proven per-column routing, not a guess: the
+                    # two edge columns detour around real copper (R6's
+                    # +3V3 pad; the LED head trace crossing LEDCH0), the
+                    # middle two don't need to.
+                    if col == 0:
+                        self.track(net, [sw, (sw[0], 50.0)], TRACK)
+                        self.via(net, sw[0], 50.0)
+                        self.track(net, [(sw[0], 50.0), (sw[0], u2pin[1])],
+                                   TRACK, pcbnew.B_Cu)
+                        self.via(net, sw[0], u2pin[1])
+                        self.track(net, [(sw[0], u2pin[1]), u2pin], TRACK)
+                    elif col == boarddef.COLS - 1:
+                        self.track(net, [sw, (sw[0], 49.0)], TRACK)
+                        self.via(net, sw[0], 49.0)
+                        self.track(net, [(sw[0], 49.0), (80.0, 49.0),
+                                         (80.0, 23.0)], TRACK, pcbnew.B_Cu)
+                        self.via(net, 80.0, 23.0)
+                        self.track(net, [(80.0, 23.0), (80.0, u2pin[1]),
+                                         u2pin], TRACK)
+                    else:
+                        self.track(net, [sw, (sw[0], u2pin[1]), u2pin], TRACK)
+                    continue
+                # Rows 1+ (8key/12key only): left as ratsnest for
+                # FreeRouting. An earlier hand-rolled channel-routing
+                # attempt here (sorted lanes, B.Cu crossing) looked sound
+                # on paper but a 12key test run still found real DRC
+                # violations (switch mounting-hole clearance, KEY-vs-KEY
+                # shorts) that weren't worth hand-debugging blind once a
+                # real autorouter was available - see docs/design or the
+                # commit history around 2026-10-10 for the abandoned
+                # version if it's ever worth revisiting.
+
+        route_cluster(col_a, "west")
+        route_cluster(col_b, "east")
+
     # -- easter eggs -------------------------------------------------------
     #
     # Scheme "The Tally" - see hardware/kicad/README.md. Three marks, all on
@@ -738,15 +971,23 @@ class BoardBuilder(object):
         self.stitching_vias()
         self.route_leds()
         self.route_strip()
-        # self.route_remaining()  # disabled: most of its hardcoded staging
-        # coordinates (CC1/CC2, RESET/BOOT, EXP_INT's main U1->U2 leg, the
-        # J2 header, the USB diff pair, KEY1-4) still assume the pre-resize
-        # layout and now cross things that didn't exist at those positions
-        # before. Only its R1/R4/R5/R6 +3V3 taps and the EXP_INT->R6 hop
-        # were fixed for the new layout (see route_strip's I2C section and
-        # the comments just above this call in the source) - the rest is
-        # handed to FreeRouting instead, same approach that already closed
-        # out the D_ESD/J1/J2-GND nets earlier this session.
+        # route_strip_extras() and route_key_matrix() are NOT called.
+        # Both were hand-rolled attempts (2026-10-10) at the nets this
+        # generator leaves as ratsnest (CC1/CC2, ~RESET/BOOT, EXP_INT, the
+        # I2C/EN pull-up stubs, J2's HDR_* nets, the USB pair, and
+        # KEY1..KEYn) - kept in the file as a documented reference, but
+        # every hand-picked coordinate in them turned out to need
+        # measuring against this tier's REAL copper (switch mounting
+        # holes, the 0.65mm-pitch expander pin column, J2's own header
+        # pads) to avoid a crossing or a short, which a human picking
+        # plausible-looking numbers kept missing in ways DRC caught one at
+        # a time. What actually closed these nets for the committed
+        # 12key board: FreeRouting (see docs/design or the 2026-10-10
+        # commit for the DSN/SES round-trip), after widening the row 1/2
+        # key-to-expander approach by giving multi-row tiers extra room
+        # between the strip and the first key row (boarddef.row_gap_extra)
+        # - the same "the board can be bigger" fix 4key's own STRIP
+        # constant already used once, for the same class of problem.
         self.silkscreen()
         self.easter_eggs()
         self.design_rules()
