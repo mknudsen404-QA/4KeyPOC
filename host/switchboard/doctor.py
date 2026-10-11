@@ -77,13 +77,16 @@ def check_firmware_identity(port: str | None) -> DoctorCheck:
     otherwise. See the "boot" event both sketches emit (Phase 3/4 of
     docs/design/wrong-firmware-recovery-plan.md).
     """
+    # No `/Volumes/SWITCHBD` shortcut here on purpose: the real `neokey`
+    # firmware grew its own composite CDC+MSC installer drive (same
+    # volume name) once the plug-and-play installer was merged into it,
+    # so a mounted SWITCHBD volume no longer implies msc_cdc_spike — the
+    # serial boot event's `firmware` field below is the only reliable
+    # signal now. Confirmed live (2026-10-11): this exact shortcut
+    # false-failed a laptop running the real, correctly-flashed board.
     resolved = port or find_default_port()
     if not resolved:
         return DoctorCheck("firmware identity", "warn", "no USB serial port found (board unplugged?)")
-    if Path("/Volumes/SWITCHBD").exists():
-        return DoctorCheck(
-            "firmware identity", "fail", f"Board is running msc_cdc_spike — reflash firmware/neokey ({_WRONG_FIRMWARE_HINT})"
-        )
     try:
         device = SerialDevice(resolved, 115200)
     except (RuntimeError, OSError) as exc:
