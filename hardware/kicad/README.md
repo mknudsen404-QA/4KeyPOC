@@ -367,7 +367,7 @@ non-plated — so no key could connect. Fixed:
   Outline is 87.3 × 135.75 mm (bigger than the old 120.65 mm quote).
 - 8key: KEY nets were never routed; still need routing.
 - `tools/gen_pcb.py` route_strip(): adds the same pad-centre via.
-- r1 originals are in each tier's `r1-backup/` folder.
+- r1 originals are in git history: `git show 81d7b05:hardware/kicad/4key/4key.kicad_pcb` (same commit for 8key; 12key r1 is `58fec66~1`).
 
 ### 4key r2 cleanup (2026-10-14) — DRC clean, 0 unconnected
 
