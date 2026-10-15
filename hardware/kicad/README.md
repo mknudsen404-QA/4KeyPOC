@@ -345,3 +345,48 @@ faith from either — see the datasheet-level detail above and in
     stackup) and ENIG if you want the bare-copper mascot to look good and not
     oxidise. Decide fab house and batch quantity (most fabs have a 5-board
     minimum even for "one") before submitting.
+
+## r2 fix — hot-swap socket pads moved to B.Cu (2026-10-14)
+
+The r1 boards (stick r1, 2026-09) came back with the Kailh socket pads on
+**F.Cu**, the same side the switch plugs into, and the switch pin holes are
+non-plated — so no key could connect. Fixed:
+
+- `lib/switchboard.pretty/SW_Hotswap_Kailh_MX.kicad_mod`: pads 1/2 now on
+  `B.Cu`/`B.Paste`/`B.Mask` (same positions — standard Kailh MX geometry).
+- All three `.kicad_pcb` files patched in place (not regenerated, so the
+  hand/FreeRouting work is kept): socket pads moved to B.Cu, a via added at
+  the centre of each routed pad 1 to reach the existing F.Cu KEY trace, and
+  all zone fills stripped — **refill zones (B) before DRC/plotting**.
+- 12key: KEY5, KEY6, KEY9, KEY10, KEY11 ran on B.Cu straight through the new
+  pad sites, so they were ripped up and need re-routing (FreeRouting again).
+- 8key: KEY nets were never routed; still need routing.
+- `tools/gen_pcb.py` route_strip(): adds the same pad-centre via.
+- r1 originals are in each tier's `r1-backup/` folder.
+
+### 4key r2 cleanup (2026-10-14) — DRC clean, 0 unconnected
+
+Running DRC on r1 (its stored fills = what was fabricated) turned up real
+faults on top of the socket problem. Physical copper connectivity on r1:
+
+- **GND split into 8 pieces.** Only the pour around the ESP32/LEDs/keys
+  reaches the USB-C ground. Isolated: U3 (AP2112 LDO) GND with C1/C2/C3,
+  all four U2 (expander) GND pins with C5/C9, R2 and R3 (the 5.1k CC
+  pull-downs) with C8, and D_ESD. So the LDO has no ground return (no clean
+  3V3), the expander has no reliable ground, and C-to-C chargers won't supply VBUS.
+  r1 boards are not usable. Fixed with 9 stitching vias (R3 gets its own via
+  at (163.9, 110.75) plus a short trace).
+- **+3V3 opens**: R4/R5/R6 (SDA, SCL, EXP_INT pull-ups) were an island, and
+  J2 pin 1 stopped 3 mm short of its pad. J2 now reached via a FreeRouting
+  detour round the USB_DP via; R4 chain fed from U2 pin 24 through a via at
+  (165.3, 137.4) and a short B.Cu run. (The x=173 trunk was also split at
+  its T-junctions so KiCad sees them as connected; those were fine in
+  copper.)
+- **LEDCH0 0.075 mm from SW_RST GND pad**: trace moved to x=103.8, ~RESET
+  via nudged to (104.6, 145.183) to make room.
+- USB_DP exit from J1 A6 straightened (was 0.192 mm from A7).
+
+Remaining warnings are cosmetic: 6 silk-clipped-by-mask on the socket
+outlines, and schematic-parity noise (board net names lack the `/` prefix,
+footprint IDs lack the library nickname, mounting holes H38–H41 are
+board-only).

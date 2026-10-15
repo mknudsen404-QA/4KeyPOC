@@ -601,6 +601,10 @@ class BoardBuilder(object):
             net = "KEY%d" % (i + 1)
             sw_pad = p("SW%d" % (i + 1), "1")
             u2_pad = p("U2", exp_pin_order[i])
+            # The hot-swap socket pads are on B.Cu (the socket solders to
+            # the back). This run starts on F.Cu, so drop to the pad with a
+            # via at its centre - inside the pad's own copper on both layers.
+            self.via(net, sw_pad[0], sw_pad[1])
             if i == 0:
                 self.track(net, [sw_pad, (sw_pad[0], 50.0)], TRACK)
                 self.via(net, sw_pad[0], 50.0)
