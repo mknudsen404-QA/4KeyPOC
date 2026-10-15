@@ -359,7 +359,12 @@ non-plated — so no key could connect. Fixed:
   the centre of each routed pad 1 to reach the existing F.Cu KEY trace, and
   all zone fills stripped — **refill zones (B) before DRC/plotting**.
 - 12key: KEY5, KEY6, KEY9, KEY10, KEY11 ran on B.Cu straight through the new
-  pad sites, so they were ripped up and need re-routing (FreeRouting again).
+  pad sites, so they were ripped up and re-routed with FreeRouting (existing
+  wiring locked as `protect`, GND in an ignored class since the pours carry
+  it; sub-0.15 mm neck-downs widened to the 0.15 mm board minimum). Same
+  GND-island and LEDCH0 fixes as 4key below, plus a via under J1 A1/B12,
+  whose pads were boxed in by the USB_DP route. DRC clean, 0 unconnected.
+  Outline is 87.3 × 135.75 mm (bigger than the old 120.65 mm quote).
 - 8key: KEY nets were never routed; still need routing.
 - `tools/gen_pcb.py` route_strip(): adds the same pad-centre via.
 - r1 originals are in each tier's `r1-backup/` folder.
